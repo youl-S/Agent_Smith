@@ -2,16 +2,17 @@ import time
 import openai
 from openai import OpenAI
 
-from exceptions import FatalError, RecoverableError
+from exceptions import AuthError, FatalError, RecoverableError
 from models import LLMResponse
 
 
 class LLMClient:
-    """Executes a single chat completion against a single provider target.
+    """
+    Executes a single chat completion against a single provider target.
 
     It does not know about key rotation or provider fallback: it is given
     one base_url, one model, one api_key, and either returns an LLMResponse
-    (success) or raises RecoverableError / FatalError.
+    (success) or raises AuthError / RecoverableError / FatalError.
     """
 
     def __init__(self, timeout_s: float = 60.0):
@@ -41,25 +42,26 @@ class LLMClient:
                 stop=stop_sequences or None,
             )
 
+        except openai.AuthenticationError as e:
+            raise AuthError(f"{type(e).__name__}: {e}") from e
+
         except (
             openai.RateLimitError,
             openai.APITimeoutError,
             openai.APIConnectionError,
-            openai.AuthenticationError,
         ) as e:
-            raise RecoverableError(f"{type(e).__name__}: {e}")
+            raise RecoverableError(f"{type(e).__name__}: {e}") from e
 
         except openai.BadRequestError as e:
-            raise FatalError(f"{type(e).__name__}: {e}")
+            raise FatalError(f"{type(e).__name__}: {e}") from e
 
         except openai.APIStatusError as e:
             if e.status_code >= 500:
-                raise RecoverableError(f"HTTP {e.status_code}: {e}")
-
-            raise FatalError(f"HTTP {e.status_code}: {e}")
+                raise RecoverableError(f"HTTP {e.status_code}: {e}") from e
+            raise FatalError(f"HTTP {e.status_code}: {e}") from e
 
         except openai.APIError as e:
-            raise RecoverableError(f"{type(e).__name__}: {e}")
+            raise RecoverableError(f"{type(e).__name__}: {e}") from e
 
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 
