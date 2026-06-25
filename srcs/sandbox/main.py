@@ -1,5 +1,4 @@
 from srcs.sandbox.sandbox import Sandbox
-from srcs.sandbox.sandbox_cli import SandboxCli
 from fire import Fire
 
 
