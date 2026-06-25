@@ -1,4 +1,19 @@
 from pydantic import BaseModel, Field, model_validator
+from enum import Enum, auto
+
+
+class ExtractedBlockStatus(Enum):
+    OK = auto()
+    NO_CODE_FOUND = auto()
+    MALFORMED_RECOVERED = auto()
+
+
+class ExtractedBlockFormat(Enum):
+    PYTHON_FORMAT = auto()
+    XML_FORMAT = auto()
+    JSON_HERMES_FORMAT = auto()
+    REACT_FORMAT = auto()
+    UNKNOWN = auto()
 
 
 class LLMResponse(BaseModel):
@@ -12,7 +27,9 @@ class LLMResponse(BaseModel):
 
     success: bool = Field(
         ...,
-        description="True if a response was obtained, False if everything failed",
+        description=(
+            "True if a response was obtained, False if everything failed"
+        ),
     )
     error: str | None = Field(
         default=None, description="Error message on failure, None on success"
@@ -38,7 +55,6 @@ class LLMResponse(BaseModel):
         default=0,
         description="Failed attempts before success (0 = succeeded first try)",
     )
-
     model_name: str = Field(default="", description="Model actually used")
     api_url: str = Field(default="", description="API URL actually used")
 
@@ -56,7 +72,9 @@ class LLMResponse(BaseModel):
 
     @classmethod
     def failure(cls, error: str) -> "LLMResponse":
-        """Convenience factory for a total failure."""
+        """
+        Convenience factory for a total failure.
+        """
         return cls(success=False, error=error)
 
 
@@ -64,7 +82,9 @@ class ProviderTarget(BaseModel):
     name: str = Field(default="", description="The provider name ex Groq")
     base_url: str = Field(
         default="",
-        description="provider url to comunicate with ex https://api.groq.com/openai/v1",
+        description=(
+            "provider url to comunicate with ex https://api.groq.com/openai/v1"
+        ),
     )
     model: str = Field(
         default="", description="Model choose to generate answer"
@@ -72,3 +92,40 @@ class ProviderTarget(BaseModel):
     key_env_vars: list[str] = Field(
         default_factory=lambda: [], description="API env variables"
     )
+
+
+class ExtractedCodeBlock(BaseModel):
+    code_extracted: str | None = Field(
+        default=None, description="Code extracted from the llm response"
+    )
+    extracted_block_status: ExtractedBlockStatus = Field(
+        description=(
+            "LLM response status (OK, NO_CODE_FOUND, MALFORMED_RECOVERED)"
+        )
+    )
+    extracted_block_format: ExtractedBlockFormat = Field(
+        description="Code response 's format"
+    )
+
+    @model_validator(mode="after")
+    def _check_coherence(self) -> "ExtractedCodeBlock":
+        has_code = bool(self.code_extracted)
+        if self.extracted_block_status == ExtractedBlockStatus.NO_CODE_FOUND:
+            if has_code:
+                raise ValueError("status=NO_CODE_FOUND but code is present")
+            if self.extracted_block_format != ExtractedBlockFormat.UNKNOWN:
+                raise ValueError(
+                    "status=NO_CODE_FOUND but format is not UNKNOWN"
+                )
+        else:
+            if not has_code:
+                raise ValueError(
+                    f"status={self.extracted_block_status.name} "
+                    "but no code extracted"
+                )
+            if self.extracted_block_format == ExtractedBlockFormat.UNKNOWN:
+                raise ValueError(
+                    f"status={self.extracted_block_status.name} "
+                    "but format is UNKNOWN"
+                )
+        return self
