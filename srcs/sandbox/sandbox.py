@@ -223,7 +223,6 @@ class Sandbox:
             self._launch_server("stdio", mcp_stdio)
         elif mcp_server:
             self._launch_server("http", mcp_server)
-        print(self.get_man())
         self.run(code_to_test)
 
     def get_man(self):
