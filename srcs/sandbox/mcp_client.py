@@ -18,9 +18,9 @@ class McpClient:
         )
         self.loop.run_until_complete(self.session.initialize())
 
-    def stdio_client(self, command, args):
+    def stdio_client(self, command, arg):
         self._transport_cm = stdio_client(
-            StdioServerParameters(command=command, args=[args])
+            StdioServerParameters(command=command, args=[arg])
         )
         read, write = self.loop.run_until_complete(
             self._transport_cm.__aenter__()
@@ -36,7 +36,14 @@ class McpClient:
         self._open_session(read, write)
 
     def list_tools(self):
+
         return self.loop.run_until_complete(self.session.list_tools())
+
+    def list_prompts(self):
+        return self.loop.run_until_complete(self.session.list_prompts())
+
+    def list_resources(self):
+        return self.loop.run_until_complete(self.session.list_resources())
 
     def call_tool(self, name, args):
         return self.loop.run_until_complete(self.session.call_tool(name, args))
