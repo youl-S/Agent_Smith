@@ -1,15 +1,28 @@
 from srcs.models import SandboxConfig
 from srcs.sandbox.mcp_client import McpClient
+from pathlib import Path
 import multiprocessing
 import builtins
 import queue
 import ast
-from pathlib import Path
 import io
 import sys
 import traceback
 import time
 import resource
+import socket
+
+
+class FinalAnswer(BaseException):
+    """Control-flow signal raised when the executed code calls final_answer().
+
+    Inherits from BaseException (not Exception) so that a generic
+    `except Exception` in the LLM-generated code cannot swallow it: the
+    final answer must always propagate up to the sandbox handler, the same
+    way KeyboardInterrupt and SystemExit are designed to bypass `except
+    Exception`.
+
+    """
 
 
 class Sandbox:
@@ -28,8 +41,7 @@ class Sandbox:
 
         def safe_open(file, *args, **kwargs):
             if isinstance(file, int):
-                if isinstance(file, int):
-                    raise PermissionError("fd not allowed")
+                raise PermissionError("fd not allowed")
             target = Path(file).resolve()
             if not any(
                 target.is_relative_to(allowed) for allowed in allowed_paths
@@ -42,6 +54,12 @@ class Sandbox:
             if name not in self._config.authorized_imports:
                 raise ImportError(f"Import {name} not allowed")
             return builtins.__import__(name, *args, **kwargs)
+
+        def final_answer(code: str):
+            raise FinalAnswer(code)
+
+        def block_net(*args, **kwargs):
+            raise PermissionError("network disabled")
 
         try:
             stdout_capture = io.StringIO()
@@ -86,36 +104,55 @@ class Sandbox:
                 "quit",
             ]:
                 custom_builtins.pop(dangerous, None)
-
             namespace = {
                 "__builtins__": custom_builtins,
+                "final_answer": final_answer,
             }
             for tool in self.mcp_client.list_tools().tools:
                 namespace[tool.name] = make_stub(tool.name, q_call, q_answer)
-
+            socket.socket = block_net
             exec(code_to_test, namespace)
             q_result.put(
                 {
                     "type": "success",
                     "stdout": stdout_capture.getvalue(),
+                    "stderr": stderr_capture.getvalue(),
                 }
             )
         except (KeyboardInterrupt, SystemExit):
             raise
+        except FinalAnswer as answer:
+            print("bonne ligne", answer)
+            q_result.put(
+                {
+                    "type": "final_answer",
+                    "answer": answer.args[0],
+                    "stdout": stdout_capture.getvalue(),
+                    "stderr": stderr_capture.getvalue(),
+                }
+            )
         except Exception:
             q_result.put(
                 {
                     "type": "error",
                     "traceback": traceback.format_exc(),
                     "stdout": stdout_capture.getvalue(),
+                    "stderr": stderr_capture.getvalue(),
                 }
             )
 
-    def _launch_server(self, protocol, arg, language="python"):
+    def _launch_server(self, protocol, args):
         if protocol == "http":
-            self.mcp_client.http_client(arg)
+            self.mcp_client.http_client(args)
         else:
-            self.mcp_client.stdio_client(language, arg)
+            try:
+                command, arg = args.split()
+            except ValueError:
+                raise ValueError(
+                    "Too many arguments\n Usage: "
+                    'uv run sandbox --mcp-stdio "<command> <script_path>"'
+                )
+            self.mcp_client.stdio_client(command, arg)
 
     def run(
         self,
@@ -177,12 +214,77 @@ class Sandbox:
             if answer == "http":
                 mcp_server = input("MCP server URL: ")
             elif answer == "stdio":
-                mcp_stdio = input("Path to the MCP server script: ")
-        print("Paste the code to evaluate, then press Ctrl-D:")
+                mcp_stdio = input(
+                    "Command and Path to launch the MCP server script: "
+                )
+        print("Write or paste the code to evaluate, then press Ctrl-D:")
         code_to_test = sys.stdin.read()
         if mcp_stdio:
-            print(mcp_server)
             self._launch_server("stdio", mcp_stdio)
         elif mcp_server:
             self._launch_server("http", mcp_server)
+        print(self.get_man())
         self.run(code_to_test)
+
+    def get_man(self):
+        template = """\
+# Agent Smith - Sandbox Manual
+
+Your code runs in an isolated Python subprocess. A fresh namespace is used
+each step (nothing persists). Observe results via stdout: print() what you
+need, unprinted values are lost.
+
+## final_answer(answer)
+Stops execution and submits the answer. Always available, NOT an MCP tool.
+Never catch it with a bare `except`.
+- MBPP: final_answer(solution_code_str)
+- SWE-bench: final_answer(get_patch())
+
+## Tools
+MCP tools (listed below) are plain Python functions; call them and print the
+result, e.g. print(search_code("is_valid_email", "*.py")). They run outside
+the sandbox, so the limits below do not apply to them.
+
+## Restrictions
+- Removed builtins (NameError): eval, exec, compile, input, breakpoint,
+  globals, locals, vars, getattr, setattr, delattr, exit, quit.
+- open(): allowed directories only, no file descriptors -> PermissionError.
+- import: allowlist only -> ImportError.
+- Dunder attribute access (__class__, __globals__, ...) -> ValueError.
+- Network disabled (socket/HTTP/DNS -> error).
+
+## Config
+- Allowed imports: {{AUTHORIZED_IMPORTS}}
+- Allowed directories: {{ALLOWED_DIRECTORIES}}
+- Memory: {{MAX_MEMORY_MB}} MB (over -> process killed)
+- Time: {{MAX_EXECUTION_TIME}} s per block (over -> process killed)
+
+## MCP server
+- Tools: {{TOOLS}}
+- Prompts: {{PROMPTS}}
+- Resources: {{RESOURCES}}
+"""
+
+        prompts = self.mcp_client.list_prompts()
+        resources = self.mcp_client.list_resources()
+        template = template.replace(
+            "{{AUTHORIZED_IMPORTS}}",
+            ", ".join(self._config.authorized_imports),
+        )
+        template = template.replace(
+            "{{ALLOWED_DIRECTORIES}}",
+            ", ".join(self._config.allowed_directories),
+        )
+        template = template.replace(
+            "{{MAX_MEMORY_MB}}", str(self._config.max_memory_mb)
+        )
+        template = template.replace(
+            "{{MAX_EXECUTION_TIME}}",
+            str(self._config.max_execution_time_seconds),
+        )
+        template = template.replace(
+            "{{TOOLS}}", str(self.mcp_client.list_tools().tools)
+        )
+        template = template.replace("{{PROMPTS}}", str(prompts))
+        template = template.replace("{{RESOURCES}}", str(resources))
+        return template
