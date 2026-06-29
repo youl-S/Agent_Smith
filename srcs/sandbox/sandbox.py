@@ -1,6 +1,7 @@
 from srcs.models import SandboxConfig
 from srcs.sandbox.mcp_client import McpClient
 from pathlib import Path
+from typing import Any, Callable
 import multiprocessing
 import builtins
 import queue
@@ -26,20 +27,46 @@ class FinalAnswer(BaseException):
 
 
 class Sandbox:
-    def __init__(self):
+    """Restricted Python execution environment backed by a subprocess."""
+
+    def __init__(self) -> None:
+        """Initialise the sandbox config and the MCP client wrapper."""
         self._config = SandboxConfig()
         self.mcp_client = McpClient()
 
-    def _subprocess(self, code_to_test: str, q_call, q_answer, q_result):
-        def make_stub(tool_name, q_call, q_answer):
-            def stub(**kwargs):
+    def _subprocess(
+        self,
+        code_to_test: str,
+        q_call: "multiprocessing.Queue[Any]",
+        q_answer: "multiprocessing.Queue[Any]",
+        q_result: "multiprocessing.Queue[Any]",
+    ) -> None:
+        """Run untrusted code in the child process under restrictions.
+
+        Executed inside a ``multiprocessing.Process``: captures
+        stdout/stderr, enforces a memory limit, rejects dunder access,
+        installs an import/open allowlist, disables the network and
+        exposes the MCP tools as stub functions. The outcome (success,
+        ``final_answer`` or error) is pushed onto ``q_result``; tool
+        calls round-trip through ``q_call``/``q_answer``.
+        """
+
+        def make_stub(
+            tool_name: str,
+            q_call: "multiprocessing.Queue[Any]",
+            q_answer: "multiprocessing.Queue[Any]",
+        ) -> Callable[..., Any]:
+            """Build a proxy that forwards a tool call to the parent."""
+
+            def stub(**kwargs: Any) -> Any:
                 q_call.put({"tool": tool_name, "args": kwargs})
                 result = q_answer.get()
                 return result
 
             return stub
 
-        def safe_open(file, *args, **kwargs):
+        def safe_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+            """open() replacement restricted to the allowed directories."""
             if isinstance(file, int):
                 raise PermissionError("fd not allowed")
             target = Path(file).resolve()
@@ -50,16 +77,22 @@ class Sandbox:
 
             return real_open(file, *args, **kwargs)
 
-        def safe_import(name, *args, **kwargs):
+        def safe_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            """__import__ replacement enforcing the import allowlist."""
             if name not in self._config.authorized_imports:
                 raise ImportError(f"Import {name} not allowed")
             return builtins.__import__(name, *args, **kwargs)
 
-        def final_answer(code: str):
-            raise FinalAnswer(code)
+        def final_answer(code: str) -> None:
+            """Stop execution and submit ``code`` as the final answer."""
+            if not code:
+                raise ValueError("Not any code provided in final answer")
+            else:
+                raise FinalAnswer(code)
 
-        def block_net(*args, **kwargs):
-            raise PermissionError("network disabled")
+        def block_net(*args: Any, **kwargs: Any) -> Any:
+            """Reject any attempt to create a network socket."""
+            raise PermissionError("Network disabled")
 
         try:
             stdout_capture = io.StringIO()
@@ -110,7 +143,7 @@ class Sandbox:
             }
             for tool in self.mcp_client.list_tools().tools:
                 namespace[tool.name] = make_stub(tool.name, q_call, q_answer)
-            socket.socket = block_net
+            socket.socket = block_net  # type: ignore[assignment, misc]
             exec(code_to_test, namespace)
             q_result.put(
                 {
@@ -122,13 +155,10 @@ class Sandbox:
         except (KeyboardInterrupt, SystemExit):
             raise
         except FinalAnswer as answer:
-            print("bonne ligne", answer)
             q_result.put(
                 {
                     "type": "final_answer",
                     "answer": answer.args[0],
-                    "stdout": stdout_capture.getvalue(),
-                    "stderr": stderr_capture.getvalue(),
                 }
             )
         except Exception:
@@ -141,7 +171,12 @@ class Sandbox:
                 }
             )
 
-    def _launch_server(self, protocol, args):
+    def _launch_server(self, protocol: str, args: str) -> None:
+        """Connect the MCP client using the chosen transport.
+
+        ``protocol`` is ``"http"`` or ``"stdio"``; ``args`` is the URL for
+        HTTP, or a ``"<command> <script_path>"`` pair for stdio.
+        """
         if protocol == "http":
             self.mcp_client.http_client(args)
         else:
@@ -157,11 +192,17 @@ class Sandbox:
     def run(
         self,
         code_to_test: str,
-    ):
+    ) -> Any:
+        """Execute ``code_to_test`` in a child process; return its result.
 
-        q_call = multiprocessing.Queue()
-        q_answer = multiprocessing.Queue()
-        q_result = multiprocessing.Queue()
+        Spawns the subprocess, services MCP tool calls while it runs and
+        enforces the wall-clock timeout (killing the process on overrun).
+        Returns the timeout message on overrun, otherwise the payload
+        pushed by the subprocess.
+        """
+        q_call: "multiprocessing.Queue[Any]" = multiprocessing.Queue()
+        q_answer: "multiprocessing.Queue[Any]" = multiprocessing.Queue()
+        q_result: "multiprocessing.Queue[Any]" = multiprocessing.Queue()
         process = multiprocessing.Process(
             target=self._subprocess,
             args=(code_to_test, q_call, q_answer, q_result),
@@ -172,12 +213,15 @@ class Sandbox:
         while process.is_alive():
             elapsed_time = time.monotonic() - start_time
             if elapsed_time >= self._config.max_execution_time_seconds:
-                output = (
-                    f"Timeout after {elapsed_time} seconds, execution stopped"
-                )
+                output = {
+                    "type": "error",
+                    "traceback": "Timeout after {elapsed_time} seconds, "
+                    "execution stopped",
+                }
+
                 process.kill()
                 kill = True
-                print(output)
+                break
             try:
                 request = q_call.get(timeout=0.1)
             except queue.Empty:
@@ -189,14 +233,21 @@ class Sandbox:
         process.join()
         if not kill:
             output = q_result.get()
-        print(f"\n\noutput:\n{output}\n")
+        return output
 
     def cli(
         self,
-        config_file: str = None,
-        mcp_stdio: str = None,
-        mcp_server: str = None,
-    ):
+        config_file: str | None = None,
+        mcp_stdio: str | None = None,
+        mcp_server: str | None = None,
+    ) -> None:
+        """Interactive CLI entry point driven by Fire.
+
+        Optionally loads a JSON config, selects the MCP transport
+        (prompting when neither flag is given), reads the code from stdin,
+        connects the server, prints the manual and runs the code.
+        ``--mcp-stdio`` and ``--mcp-server`` are mutually exclusive.
+        """
         if config_file:
             self._config = SandboxConfig.model_validate_json(
                 Path(config_file).read_text()
@@ -223,9 +274,11 @@ class Sandbox:
             self._launch_server("stdio", mcp_stdio)
         elif mcp_server:
             self._launch_server("http", mcp_server)
+        print(self.get_man())
         self.run(code_to_test)
 
-    def get_man(self):
+    def get_man(self) -> str:
+        """Render the sandbox manual with config and MCP metadata."""
         template = """\
 # Agent Smith - Sandbox Manual
 
