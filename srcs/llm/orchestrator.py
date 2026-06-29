@@ -4,6 +4,13 @@ from ..models import StepMetrics, SolutionOutput
 from .manager import LLMManager
 from .code_extractor import CodeExtractor
 
+"""
+class SandboxResult:
+    observation: str
+    is_final: bool = False
+    final_answer: str | None = None
+"""
+
 
 class Orchestrator:
     """The agent loop. Benchmark-agnostic."""
@@ -61,7 +68,7 @@ class Orchestrator:
                 sandbox_input = ""
             else:
                 sandbox_input = code
-                result = self._sandbox.execute(code)  # type: ignore[attr-defined]
+                result = self._sandbox.exec(code)
                 observation = result.observation
                 if result.is_final:
                     solution = result.final_answer or ""
