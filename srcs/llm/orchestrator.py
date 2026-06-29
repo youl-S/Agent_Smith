@@ -68,11 +68,23 @@ class Orchestrator:
                 sandbox_input = ""
             else:
                 sandbox_input = code
-                result = self._sandbox.exec(code)
-                observation = result.observation
-                if result.is_final:
-                    solution = result.final_answer or ""
+                result = self._sandbox.run(code)
+
+                if result["type"] == "final_answer":
+                    solution = result["answer"]
+                    observation = (
+                        result.get("stdout", "") or "final_answer received"
+                    )
                     success = True
+                else:
+                    parts = [
+                        result.get("stdout", ""),
+                        result.get("traceback", ""),
+                    ]
+                    observation = (
+                        "\n".join(p for p in parts if p).strip()
+                        or "(no output)"
+                    )
 
             steps.append(
                 StepMetrics(

@@ -12,9 +12,6 @@ from llm import (
     Orchestrator,
 )
 
-load_dotenv()
-
-
 # Provisional manual
 SANDBOX_MANUAL = (
     "- run_tests(code, test_list, test_imports): run candidate code "
@@ -98,6 +95,8 @@ def run_mbpp(
         client=LLMClient(timeout_s=60.0),
     )
     sandbox = Sandbox()
+    sandbox._launch_server("stdio", "python mcp_tools_mbpp.py")
+
     orchestrator = Orchestrator(
         manager=manager,
         extractor=CodeExtractor,
