@@ -61,7 +61,10 @@ class Sandbox:
             def stub(**kwargs: Any) -> Any:
                 q_call.put({"tool": tool_name, "args": kwargs})
                 result = q_answer.get()
-                return result
+                result_str = result.content[0].text
+                if result_str.startswith("FAIL"):
+                    raise RuntimeError(result_str)
+                return result_str
 
             return stub
 
@@ -154,6 +157,7 @@ class Sandbox:
             )
         except (KeyboardInterrupt, SystemExit):
             raise
+
         except FinalAnswer as answer:
             q_result.put(
                 {
