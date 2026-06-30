@@ -1,9 +1,9 @@
 import os
 import time
 
-from exceptions import AuthError, FatalError, RecoverableError
-from client import LLMClient
-from models import ProviderTarget, LLMResponse
+from srcs.llm.exceptions import AuthError, FatalError, RecoverableError
+from srcs.llm.client import LLMClient
+from srcs.llm.models import ProviderTarget, LLMResponse
 
 
 class LLMManager:

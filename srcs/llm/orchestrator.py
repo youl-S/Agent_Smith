@@ -1,8 +1,8 @@
 import time
 
-from ..models import StepMetrics, SolutionOutput
-from .manager import LLMManager
-from .code_extractor import CodeExtractor
+from srcs.models import StepMetrics, SolutionOutput
+from srcs.llm.manager import LLMManager
+from srcs.llm.code_extractor import CodeExtractor
 
 """
 class SandboxResult:
@@ -13,7 +13,11 @@ class SandboxResult:
 
 
 class Orchestrator:
-    """The agent loop. Benchmark-agnostic."""
+    """The agent loop. Benchmark-agnostic.
+
+    All limits are parameters so MBPP and SWE can pass their own values
+    (MBPP: 6000/1500/120, SWE: 300000/10000/900).
+    """
 
     def __init__(
         self,
@@ -23,6 +27,10 @@ class Orchestrator:
         system_prompt: str,
         stop_sequences: list[str] | None = None,
         max_iterations: int = 10,
+        max_input_tokens: int = 6000,
+        max_output_tokens: int = 1500,
+        max_time_seconds: float = 120.0,
+        safety_margin: float = 0.9,
     ) -> None:
         self._manager: LLMManager = manager
         self._extractor: type[CodeExtractor] = extractor
@@ -30,6 +38,10 @@ class Orchestrator:
         self._system_prompt: str = system_prompt
         self._stop: list[str] = stop_sequences or ["<end_code>"]
         self._max_iter: int = max_iterations
+        self._max_input: int = max_input_tokens
+        self._max_output: int = max_output_tokens
+        self._max_time: float = max_time_seconds
+        self._margin: float = safety_margin
 
     def run(
         self,
@@ -48,12 +60,28 @@ class Orchestrator:
         solution: str = ""
         success: bool = False
         error: str | None = None
+        total_input: int = 0
+        total_output: int = 0
 
         for i in range(1, self._max_iter + 1):
+            elapsed = time.perf_counter() - start
+            if elapsed >= self._max_time * self._margin:
+                error = f"time limit ({self._max_time}s) reached"
+                break
+            if total_input >= self._max_input * self._margin:
+                error = f"input token limit ({self._max_input}) reached"
+                break
+            if total_output >= self._max_output * self._margin:
+                error = f"output token limit ({self._max_output}) reached"
+                break
+
             llm = self._manager.generate(messages, stop_sequences=self._stop)
             if not llm.success:
                 error = f"LLM failed: {llm.error}"
                 break
+
+            total_input += llm.input_tokens
+            total_output += llm.output_tokens
 
             block = self._extractor.extract(llm.text)
             code: str | None = block.code_extracted
@@ -82,8 +110,7 @@ class Orchestrator:
                         result.get("traceback", ""),
                     ]
                     observation = (
-                        "\n".join(p for p in parts if p).strip()
-                        or "(no output)"
+                        "\n".join(p for p in parts if p).strip() or ""
                     )
 
             steps.append(

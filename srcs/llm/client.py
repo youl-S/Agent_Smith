@@ -2,8 +2,8 @@ import time
 import openai
 from openai import OpenAI
 
-from exceptions import AuthError, FatalError, RecoverableError
-from models import LLMResponse
+from srcs.llm.exceptions import AuthError, FatalError, RecoverableError
+from srcs.llm.models import LLMResponse
 
 
 class LLMClient:

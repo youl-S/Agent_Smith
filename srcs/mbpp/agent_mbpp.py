@@ -1,10 +1,13 @@
 import os
+import json
+
+from fire import Fire
 
 from dotenv import load_dotenv
 
-from ..models import MBPPTaskInput, SolutionOutput
-from sandbox.sandbox import Sandbox
-from llm import (
+from srcs.models import MBPPTaskInput, SolutionOutput
+from srcs.sandbox.sandbox import Sandbox
+from srcs.llm import (
     LLMClient,
     LLMManager,
     ProviderTarget,
@@ -26,13 +29,18 @@ def build_system_prompt(sandbox_manual: str) -> str:
 Thought -> Code -> Observation loop.
 
 # Response format
-Each turn: write a brief Thought, then exactly ONE Python code block ending \
-with <end_code>:
+Each turn: write a brief Thought, then exactly ONE Python code block with
+exactly ONE tool call (either run_tests OR final_answer, never both),
+ending with <end_code>.
 
-```python
-# your code here
-```
-<end_code>
+You MUST call every tool with KEYWORD arguments only (name=value).
+Never use positional arguments.
+- Correct:   run_tests(code=code, test_list=tests, test_imports=[])
+- Incorrect: run_tests(code, tests, [])
+
+You will NOT see the result of run_tests if you call final_answer in the
+same block. You MUST wait for the run_tests Observation in the NEXT turn
+before calling final_answer.
 
 The code runs in a sandbox. You then receive an Observation and continue.
 
@@ -43,15 +51,23 @@ The following tools are available as Python functions inside the sandbox:
 
 # How to solve
 1. Write the solution function.
-2. Optionally call run_tests(...) to check it.
-3. When confident, call final_answer(...) with the complete solution.
-
-You may call final_answer directly if you are sure. Solve in few turns.
+2. You MUST call run_tests(...) at least once and see it PASS before
+   submitting. Never call final_answer without having run run_tests first.
+3. Once run_tests reports PASS, call final_answer(...) with the complete
+   solution.
 
 # Example
-Thought: Simple sum, I submit directly.
+Thought: I write the function, then verify it with run_tests before submitting.
 ```python
-final_answer("def add(a, b):\\n    return a + b")
+code = "def add(a, b):\\n    return a + b"
+run_tests(code=code, test_list=["assert add(2, 3) == 5"], test_imports=[])
+```
+<end_code>
+
+(After observing PASS)
+Thought: Tests pass, I submit.
+```python
+final_answer(code="def add(a, b):\\n    return a + b")
 ```
 <end_code>
 """
@@ -112,38 +128,32 @@ def run_mbpp(
     )
 
 
-def main() -> None:
-    """Quick end-to-end run on MBPP task 282 against the real provider."""
-    task = MBPPTaskInput(
-        task_id=282,
-        task_definition="Write a function to subtract two lists "
-        "element-wise using map and lambda.",
-        function_definition="def sub_list(nums1, nums2):",
-        test_imports=[],
-        test_list=[
-            "assert sub_list([1,2],[3,4])==[-2,-2]",
-            "assert sub_list([90,120],[50,70])==[40,50]",
-        ],
-    )
-    out = run_mbpp(
-        task=task,
-        model_name="llama-3.3-70b-versatile",
-        provider_url="https://api.groq.com/openai/v1",
-    )
+def run_mbpp_cli(
+    task_file: str = None,
+    output: str = None,
+    model_name: str = None,
+    provider_url: str = None,
+) -> None:
+    try:
+        with open(task_file, "r") as f:
+            file_content = f.read()
 
-    print("success    :", out.success)
-    print("iterations :", out.iterations)
-    print("solution   :", out.solution)
-    print("requests   :", out.total_requests)
-    print("in/out tok :", out.total_input_tokens, "/", out.total_output_tokens)
-    print("time       :", round(out.total_time_seconds, 1), "s")
-    print("error      :", out.error)
-    print("\n--- per step ---")
-    for s in out.steps:
-        print(
-            f"step {s.step}: out_tok={s.output_tokens} "
-            f"obs={s.sandbox_output[:50]!r}"
-        )
+        data = json.loads(file_content)
+        task_input = MBPPTaskInput.model_validate(data)
+
+        solution_output = run_mbpp(task_input, model_name, provider_url)
+
+        print(json.dumps(solution_output.model_dump(), indent=4))
+
+        os.makedirs(os.path.dirname(output), exist_ok=True)
+        with open(output, "w") as f:
+            f.write(solution_output.model_dump_json(indent=4))
+    except Exception as e:
+        print(f"Error {e}")
+
+
+def main() -> None:
+    Fire(run_mbpp_cli)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 import re
 import json
-from models import (
+from srcs.llm.models import (
     ExtractedCodeBlock,
     ExtractedBlockStatus,
     ExtractedBlockFormat,
