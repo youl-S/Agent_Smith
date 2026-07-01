@@ -57,6 +57,7 @@ execute_bash(cmd="grep -rn 'def calculate_total' src/")"""
 def build_task_message(task: SWEBenchTaskInput) -> str:
     pass
 
+
 def discover_key_vars() -> list[str]:
     """Return all env var names that look like API keys (contain API_KEY)."""
     load_dotenv()

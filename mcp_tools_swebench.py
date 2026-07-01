@@ -35,10 +35,14 @@ class McpToolSwe:
                                      "-d", self.task_image,
                                      "sleep", "infinity"],
                                     capture_output=True,  # catch
-                                    text=True)  # print
+                                    text=True,
+                                    check=True)  # print
+
+        if run_docker.returncode != 0:
+            print('error')
 
         self.id_containeur = run_docker.stdout.strip("\n")
-        print(self.id_containeur)
+        # print(self.id_containeur)
 
     def exec(self, cmd_exec: str, work_dir: str = TESTBED):
         # for exec cmd tool
@@ -62,3 +66,23 @@ class McpToolSwe:
 
 
 # git -c core.fileMode=false dif
+
+if __name__ == "__main__":
+    pass
+    # test_img = "swebench/sweb.eval.x86_64.sympy_1776_sympy-18189:latest"
+    # try:
+    #     testeur = McpToolSwe(test_img, eval_script="/testbed/eval.sh")
+    #     testeur.start_containeur()
+    #     show_img_on = subprocess.run(["docker", "images"], capture_output=True, text=True)
+    #     print(show_img_on.stdout)
+    #     print()
+    #     print('exec create dir')
+    #     testeur.exec("mkdir theo")
+    #     ls = testeur.exec("ls -la")
+    #     print(ls.stdout)
+    #     print('')
+    #     print('clean containeur')
+    #     testeur.clean_containeur()
+    #     print('clean Ok')
+    # except subprocess.CalledProcessError as e:
+    #     print(f"error {e.stderr}")
