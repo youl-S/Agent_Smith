@@ -35,6 +35,8 @@ def run_swebench (
     os.environ["SWE_EVAL_SCRIPT"] = task.eval_script
 
     sandbox = Sandbox()
+    sandbox._launch_server("stdio", "python mcp_tools_swebench.py")
+
 
 def run_swebench_cli(
         task_file: str = None,
