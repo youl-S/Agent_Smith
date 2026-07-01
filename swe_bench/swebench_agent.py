@@ -66,7 +66,8 @@ def discover_key_vars() -> list[str]:
         if "API_KEY" in name and os.environ.get(name)
     )
 
-def run_swebench (
+
+def run_swebench(
         task: SWEBenchTaskInput,
         model_name: str,
         provider_url: str,
@@ -75,7 +76,6 @@ def run_swebench (
     # var set ----> child (subprocess) pour run le docker
     os.environ["SWE_DOCKER_IMG"] = task.docker_image
     os.environ["SWE_EVAL_SCRIPT"] = task.eval_script
-
 
     target = ProviderTarget(
         name="provider",
@@ -107,6 +107,7 @@ def run_swebench (
             task_message=build_task_message(task),
         )
 
+
 def run_swebench_cli(
         task_file: str = None,
         output: str = None,
@@ -120,7 +121,9 @@ def run_swebench_cli(
         data = json.loads(content)
         parse_task = SWEBenchTaskInput.model_validate(data)
 
-        solution_output = run_swebench(parse_task, model_name=model_name, provider_url=provider_url)
+        solution_output = run_swebench(parse_task,
+                                       model_name=model_name,
+                                       provider_url=provider_url)
 
         os.makedirs(os.path.dirname(output), exist_ok=True)
         with open(output, "w") as f:
@@ -132,6 +135,7 @@ def run_swebench_cli(
         print(f"[Error] {e}")
     except Exception as e:
         print(f'[Error] {e}')
+
 
 def main() -> None:
     Fire(run_swebench_cli)
