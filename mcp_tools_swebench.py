@@ -21,7 +21,7 @@ def load_config() -> tuple[str, str]:
     return task_image, eval_script
 
 
-class McpToolSwe:
+class DockerExec:
     def __init__(self, task_image, eval_script) -> None:
         self.task_image = task_image
         self.eval_script = eval_script
@@ -72,7 +72,8 @@ def containeur_sandbox():
         if execute_containeur is None:
             task_image, evaluation_script = load_config()
             print(load_config)
-            execute_containeur = McpToolSwe(task_image, evaluation_script)  # id
+            execute_containeur = DockerExec(task_image, evaluation_script)  # id
+            print(execute_containeur)
     except ValueError as e:
         print(e)
     return execute_containeur
@@ -82,9 +83,27 @@ def containeur_sandbox():
 def read_file(filepath: str, start_line: int = 1, end_line: int = -1):
     execution_containeur = containeur_sandbox()
     cmd = execution_containeur.exec(f"cat {filepath}")
-
     if cmd.returncode != 0:
         return f"Error {cmd.stderr.strip()}"
+
+    get_line = cmd.stdout.splitlines()
+    lines_total = len(get_line)
+
+    start_idx = max(0, start_line - 1)
+    if end_line == -1:
+        end_idx = lines_total
+    else:
+        min(end_line, lines_total)
+
+    format_output = []
+    for numbers, lines in enumerate(
+            get_line[start_idx:end_idx],
+            start=start_line
+            ):
+        format_output.append(f"{numbers}: {lines}")
+    if not format_output:
+        return "File is empty"
+    return '\n'.join(format_output)
 
 
 @mcp.tool()
@@ -94,7 +113,11 @@ def edit_file(filepath: str, old_str: str, new_str: str):
 
 @mcp.tool()
 def list_files(directory: str, pattern: str = "*"):
-    pass
+    execute_containeur = containeur_sandbox()
+    cmd = execute_containeur.exec(f"find {directory} -type f -name {pattern}")
+    if cmd.returncode != 0:
+        return f"Error {cmd.stderr.strip()}"
+    return cmd.stdout.strip()
 
 
 @mcp.tool()
@@ -131,21 +154,21 @@ def run_command(command: str, workdir: str = TESTBED):
 
 if __name__ == "__main__":
     pass
-    # test_img = "swebench/sweb.eval.x86_64.sympy_1776_sympy-18189:latest"
-    # try:
-    #     testeur = McpToolSwe(test_img, eval_script="/testbed/eval.sh")
-    #     testeur.start_containeur()
-    #     show_img_on = subprocess.run(["docker", "images"],
-    # capture_output=True, text=True)
-    #     print(show_img_on.stdout)
-    #     print()
-    #     print('exec create dir')
-    #     testeur.exec("mkdir theo")
-    #     ls = testeur.exec("ls -la")
-    #     print(ls.stdout)
-    #     print('')
-    #     print('clean containeur')
-    #     testeur.clean_containeur()
-    #     print('clean Ok')
-    # except subprocess.CalledProcessError as e:
-    #     print(f"error {e.stderr}")
+    test_img = "swebench/sweb.eval.x86_64.sympy_1776_sympy-18189:latest"
+    try:
+        testeur = DockerExec(test_img, eval_script="/testbed/eval.sh")
+        testeur.start_containeur()
+        show_img_on = subprocess.run(["docker", "images"],
+                                     capture_output=True, text=True)
+        print(show_img_on.stdout)
+        print()
+        print('exec create dir')
+        testeur.exec("mkdir theo")
+        ls = testeur.exec("ls -la")
+        print(ls.stdout)
+        print('')
+        print('clean containeur')
+        testeur.clean_containeur()
+        print('clean Ok')
+    except subprocess.CalledProcessError as e:
+        print(f"error {e.stderr}")
