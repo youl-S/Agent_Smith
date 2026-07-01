@@ -3,6 +3,7 @@ import subprocess
 import os
 
 mcp = FastMCP("swebench-tools")
+TESTBED = "testbed/"
 
 # child (mcpswetoo) parent(agent-swe)
 def load_config() -> tuple[str, str]:
@@ -32,13 +33,13 @@ class McpToolSwe:
                                     capture_output=True, # catch 
                                     text=True) # print
 
-        self.id_containeur = run_docker.stdout.strip()
+        self.id_containeur = run_docker.stdout.strip("\n")
         print(self.id_containeur)
 
-    def exec():
+    def exec(self, cmd_exec: str, work_dir: str = TESTBED):
         # for exec cmd tool
         pass
 
 
-# read ...
+# read ... (exec avec docker chaques cmd dans un containeur)
 # @mcp.tool()
