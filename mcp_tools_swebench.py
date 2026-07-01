@@ -16,17 +16,18 @@ def load_config() -> tuple[str, str]:
 
 
 class McpToolSwe:
-    def __init__(self, task_image, eval_script,id_containeur):
+    def __init__(self, task_image, eval_script):
         self.task_image = task_image
         self.eval_script = eval_script
         self.id_containeur: str | None = None  # remplir
 
-    def start_containeur(self, docker_id: str) -> None:
+    def start_containeur(self) -> None:
         pull_image = subprocess.run(["docker", "pull", self.task_image],
                               capture_output=True, text=True) # sotkc id_containeur
 
         # aucun reseau d arriere plan
-        run_docker = subprocess.run(["docker", "run", "--network none", "-d", self.task_image, "sleep", "infinity"],
+        run_docker = subprocess.run(["docker", "run", "--network", "none", "-d",
+                                    self.task_image, "sleep", "infinity"],
                                     capture_output=True, # catch 
                                     text=True) # print
 
