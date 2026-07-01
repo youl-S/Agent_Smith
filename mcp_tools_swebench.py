@@ -4,6 +4,7 @@ import os
 
 mcp = FastMCP("swebench-tools")
 TESTBED = "/testbed"  # code patch
+execute_containeur = None  # global mem (MCPToolSwe(id...))
 
 
 # child (mcpswetoo) parent(agent-swe)
@@ -62,7 +63,68 @@ class McpToolSwe:
             subprocess.run(["docker", "rm", "-f", self.id_containeur])
 
 # read ... (exec avec docker chaques cmd dans un containeur)
-# @mcp.tool()
+
+
+# for execute into containeur
+def containeur_sandbox():
+    global execute_containeur
+    try:
+        if execute_containeur is None:
+            task_image, evaluation_script = load_config()
+            print(load_config)
+            execute_containeur = McpToolSwe(task_image, evaluation_script)  # id
+    except ValueError as e:
+        print(e)
+    return execute_containeur
+
+
+@mcp.tool()
+def read_file(filepath: str, start_line: int = 1, end_line: int = -1):
+    execution_containeur = containeur_sandbox()
+    cmd = execution_containeur.exec(f"cat {filepath}")
+
+    if cmd.returncode != 0:
+        return f"Error {cmd.stderr.strip()}"
+
+
+@mcp.tool()
+def edit_file(filepath: str, old_str: str, new_str: str):
+    pass
+
+
+@mcp.tool()
+def list_files(directory: str, pattern: str = "*"):
+    pass
+
+
+@mcp.tool()
+def search_code(pattern: str, file_pattern: str = '*'):
+    pass
+
+
+@mcp.tool()
+def search_function_or_class_definition_in_code(name: str):
+    pass
+
+
+@mcp.tool()
+def find_references(name: str, filepath: str, line: str):
+    pass
+
+
+@mcp.tool()
+def run_tests():
+    pass
+
+
+@mcp.tool()
+def get_patch():
+    pass
+
+
+@mcp.tool()
+def run_command(command: str, workdir: str = TESTBED):
+    pass
 
 
 # git -c core.fileMode=false dif
@@ -73,7 +135,8 @@ if __name__ == "__main__":
     # try:
     #     testeur = McpToolSwe(test_img, eval_script="/testbed/eval.sh")
     #     testeur.start_containeur()
-    #     show_img_on = subprocess.run(["docker", "images"], capture_output=True, text=True)
+    #     show_img_on = subprocess.run(["docker", "images"],
+    # capture_output=True, text=True)
     #     print(show_img_on.stdout)
     #     print()
     #     print('exec create dir')

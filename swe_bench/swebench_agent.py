@@ -14,11 +14,16 @@ import json
 import os
 
 SANDBOX_MANUAL = (
-    "- execute_bash(cmd): Runs a shell command inside the repository root (/testbed).\n"
-    "  Use this to apply patches, run pytest/unittest, or grep files.\n"
-    "- read_file(path): Reads the contents of a file relative to the repository root.\n"
-    "- run_evaluation(): Runs the official SWE-bench evaluation script to check if the repository bug is fully resolved.\n"
-    "- final_answer(code): Submit the task once you verify your patch works. Here, 'code' can be the git diff patch string."
+    "- read_file(filepath, start_line=1, end_line=-1): Read the content of a file with line numbers.\n"
+    "- edit_file(filepath, old_str, new_str): Replace an exact string in a file with a new string.\n"
+    "- list_files(directory, pattern='*'): List files in a directory matching a given pattern.\n"
+    "- search_code(pattern, file_pattern='*.py'): Perform a grep-like search in the codebase.\n"
+    "- search_function_or_class_definition_in_code(name): Find the definition of a function or a class.\n"
+    "- find_references(name, filepath=None, line=None): Find all usages of a symbol.\n"
+    "- run_tests(): Execute the evaluation script.\n"
+    "- get_patch(): Retrieve the unified git diff of all changes made to the repository.\n"
+    "- run_command(command, workdir='/testbed'): Execute a shell command in the specified working directory.\n"
+    "- final_answer(answer_string): Submit the task once you verify your patch works."
 )
 
 
@@ -52,7 +57,7 @@ The following tools are available as Python functions inside your sandbox:
 # Example
 Thought: I will search for the faulty method in the codebase.
 ```python
-execute_bash(cmd="grep -rn 'def calculate_total' src/")"""
+run_tests(cmd="grep -rn 'def calculate_total' src/")"""
 
 def build_task_message(task: SWEBenchTaskInput) -> str:
     pass
