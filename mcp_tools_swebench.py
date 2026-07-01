@@ -20,7 +20,7 @@ def load_config() -> tuple[str, str]:
 
 
 class McpToolSwe:
-    def __init__(self, task_image, eval_script):
+    def __init__(self, task_image, eval_script) -> None:
         self.task_image = task_image
         self.eval_script = eval_script
         self.id_containeur: str | None = None  # remplir
@@ -38,7 +38,7 @@ class McpToolSwe:
         self.id_containeur = run_docker.stdout.strip("\n")
         print(self.id_containeur)
 
-    def exec(self, cmd_exec: str, work_dir: str = TESTBED) -> str:
+    def exec(self, cmd_exec: str, work_dir: str = TESTBED):
         # for exec cmd tool
         if not self.id_containeur:
             raise ValueError('Cannot find id_containeur')
