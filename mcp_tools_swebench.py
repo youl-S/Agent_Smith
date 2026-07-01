@@ -1,9 +1,10 @@
 from mcp.server.fastmcp import FastMCP
-import os
 import subprocess
+import os
 
 mcp = FastMCP("swebench-tools")
 
+# child (mcpswetoo) parent(agent-swe)
 def load_config() -> tuple[str, str]:
         task_image = os.getenv("SWE_DOCKER_IMG")  # from agent set environ()
         if not task_image:

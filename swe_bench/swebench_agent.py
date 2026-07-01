@@ -1,13 +1,13 @@
 from srcs.models import SWEBenchTaskInput, SolutionOutput
-from fire import Fire
-import subprocess
-import os
-from json import JSONDecodeError
 from srcs.sandbox.sandbox import Sandbox
+from json import JSONDecodeError
+from fire import Fire
 from srcs.llm import (
     CodeExtractor,
 )
+import subprocess
 import json
+import os
 
 SANDBOX_MANUAL = (
     "- run_tests(code, test_list, test_imports): run candidate code "
