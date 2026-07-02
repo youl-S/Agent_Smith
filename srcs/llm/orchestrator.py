@@ -48,6 +48,7 @@ class Orchestrator:
         task_id: str,
         benchmark: str,
         task_message: str,
+        input_prediction_factor: float = 1.4,
     ) -> SolutionOutput:
         start: float = time.perf_counter()
 
@@ -68,9 +69,16 @@ class Orchestrator:
             if elapsed >= self._max_time * self._margin:
                 error = f"time limit ({self._max_time}s) reached"
                 break
-            if total_input >= self._max_input * self._margin:
-                error = f"input token limit ({self._max_input}) reached"
-                break
+            if steps:
+                if (
+                    round(
+                        total_input
+                        + (steps[-1].input_tokens * input_prediction_factor)
+                    )
+                    >= self._max_input
+                ):
+                    error = f"input token limit ({self._max_input}) reached"
+                    break
             if total_output >= self._max_output * self._margin:
                 error = f"output token limit ({self._max_output}) reached"
                 break
