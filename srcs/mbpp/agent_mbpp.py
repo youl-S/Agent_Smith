@@ -1,6 +1,3 @@
-import os
-import json
-
 from fire import Fire
 from dotenv import load_dotenv
 from pathlib import Path
@@ -13,6 +10,8 @@ from srcs.llm import (
     CodeExtractor,
     Orchestrator,
 )
+import json
+import os
 
 
 def build_system_prompt(sandbox_manual: str) -> str:
