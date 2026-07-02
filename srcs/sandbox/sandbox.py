@@ -63,7 +63,8 @@ class Sandbox:
                 result = q_answer.get()
                 result_str = result.content[0].text
                 if result_str.startswith("FAIL"):
-                    raise RuntimeError(result_str)
+                    print(result_str)
+                    # raise RuntimeError(result_str)
                 return result_str
 
             return stub
@@ -150,7 +151,7 @@ class Sandbox:
             exec(code_to_test, namespace)
             q_result.put(
                 {
-                    "type": "success",
+                    "type": "execution succeed",
                     "stdout": stdout_capture.getvalue(),
                     "stderr": stderr_capture.getvalue(),
                 }
@@ -168,7 +169,7 @@ class Sandbox:
         except Exception:
             q_result.put(
                 {
-                    "type": "error",
+                    "type": "execution failed",
                     "traceback": traceback.format_exc(),
                     "stdout": stdout_capture.getvalue(),
                     "stderr": stderr_capture.getvalue(),
@@ -283,36 +284,32 @@ class Sandbox:
     def get_man(self) -> str:
         """Render the sandbox manual with config and MCP metadata."""
         template = """\
-# Agent Smith - Sandbox Manual
-
-Your code runs in an isolated Python subprocess. A fresh namespace is used
-each step (nothing persists). Observe results via stdout: print() what you
-need, unprinted values are lost.
+Isolated Python subprocess, fresh namespace each step (nothing persists).
+Only stdout is returned — print() what you need, or the value is lost.
 
 ## final_answer(answer)
-Stops execution and submits the answer. Always available, NOT an MCP tool.
-Never catch it with a bare `except`.
+Always available (not an MCP tool); stops execution and submits. Never catch
+it with a bare `except`.
 - MBPP: final_answer(solution_code_str)
 - SWE-bench: final_answer(get_patch())
 
-## Tools
-MCP tools (listed below) are plain Python functions; call them and print the
-result, e.g. print(search_code("is_valid_email", "*.py")). They run outside
-the sandbox, so the limits below do not apply to them.
+## MCP tools
+Plain Python functions — call and print, e.g. print(search_code("x", "*.py")).
+They run outside the sandbox, so the limits below don't apply to them.
 
 ## Restrictions
-- Removed builtins (NameError): eval, exec, compile, input, breakpoint,
-  globals, locals, vars, getattr, setattr, delattr, exit, quit.
-- open(): allowed directories only, no file descriptors -> PermissionError.
-- import: allowlist only -> ImportError.
-- Dunder attribute access (__class__, __globals__, ...) -> ValueError.
-- Network disabled (socket/HTTP/DNS -> error).
+- NameError builtins: eval, exec, compile, input, breakpoint, globals,
+  locals, vars, getattr, setattr, delattr, exit, quit.
+- open(): allowed dirs only, no file descriptors → PermissionError.
+- import: allowlist only → ImportError.
+- Dunder access (__class__, __globals__, …) → ValueError.
+- Network disabled (socket/HTTP/DNS → error).
 
 ## Config
-- Allowed imports: {{AUTHORIZED_IMPORTS}}
-- Allowed directories: {{ALLOWED_DIRECTORIES}}
-- Memory: {{MAX_MEMORY_MB}} MB (over -> process killed)
-- Time: {{MAX_EXECUTION_TIME}} s per block (over -> process killed)
+- Imports: {{AUTHORIZED_IMPORTS}}
+- Directories: {{ALLOWED_DIRECTORIES}}
+- Memory: {{MAX_MEMORY_MB}} MB / Time: {{MAX_EXECUTION_TIME}} s per block
+  (exceed → process killed)
 
 ## MCP server
 - Tools: {{TOOLS}}
@@ -342,4 +339,5 @@ the sandbox, so the limits below do not apply to them.
         )
         template = template.replace("{{PROMPTS}}", str(prompts))
         template = template.replace("{{RESOURCES}}", str(resources))
+        print(template)
         return template
