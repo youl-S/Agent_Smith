@@ -79,9 +79,16 @@ class Orchestrator:
                 ):
                     error = f"input token limit ({self._max_input}) reached"
                     break
-            if total_output >= self._max_output * self._margin:
-                error = f"output token limit ({self._max_output}) reached"
-                break
+            if steps:
+                if (
+                    round(
+                        total_output
+                        + (steps[-1].input_tokens * input_prediction_factor)
+                    )
+                    >= self._max_output
+                ):
+                    error = f"output token limit ({self._max_output}) reached"
+                    break
 
             llm = self._manager.generate(messages, stop_sequences=self._stop)
             if not llm.success:
