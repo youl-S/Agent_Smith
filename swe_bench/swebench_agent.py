@@ -89,6 +89,7 @@ def run_swebench(
         model=model_name,
         key_env_vars=discover_key_vars()
     )
+
     manager = LLMManager(
         target=[target],
         client=LLMClient(timeout_s=90.0)

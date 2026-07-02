@@ -43,6 +43,7 @@ class DockerExec:
             print('error')
 
         self.id_containeur = run_docker.stdout.strip("\n")
+
         # print(self.id_containeur)
 
     def exec(self, cmd_exec: str, work_dir: str = TESTBED):
