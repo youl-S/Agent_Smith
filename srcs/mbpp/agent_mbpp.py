@@ -112,6 +112,7 @@ def run_mbpp(
             task_id=str(task.task_id),
             benchmark="mbpp",
             task_message=build_task_message(task),
+            max_tokens=1500,
         )
     finally:
         try:
