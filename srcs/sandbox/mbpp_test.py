@@ -5,9 +5,9 @@ mcp = FastMCP("mbpp-tools", port=8080)
 
 
 @mcp.tool()
-def add(a: int, b: int) -> int:
+def add(a: int, b: int) -> str:
     """Additionne deux nombres."""
-    return a + b
+    return "FAIL"
 
 
 @mcp.tool()

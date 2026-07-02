@@ -11,7 +11,7 @@ def run_tests(
     test_imports: list[str],
 ) -> str:
     """Run candidate Python code against a list of assert-based tests.
-
+·
     Args:
         code: The candidate solution, a complete Python function
             definition (e.g. "def sub_list(a, b): return ...").
