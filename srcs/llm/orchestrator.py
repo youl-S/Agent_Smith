@@ -83,7 +83,7 @@ class Orchestrator:
                 if (
                     round(
                         total_output
-                        + (steps[-1].input_tokens * input_prediction_factor)
+                        + (steps[-1].output_tokens * input_prediction_factor)
                     )
                     >= self._max_output
                 ):
