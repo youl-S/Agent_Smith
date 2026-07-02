@@ -27,7 +27,9 @@ class LLMManager:
         )
         time.sleep(delay)
 
-    def generate(self, messages, stop_sequences=None) -> LLMResponse:
+    def generate(
+        self, messages, stop_sequences=None, max_tokens: int | None = None
+    ) -> LLMResponse:
         retries = 0
         last_error = "no targets configured"
 
@@ -47,6 +49,7 @@ class LLMManager:
                         api_key,
                         messages,
                         stop_sequences,
+                        max_tokens,
                     )
                     resp.retries = retries
                     return resp

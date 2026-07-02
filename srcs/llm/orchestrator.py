@@ -49,6 +49,7 @@ class Orchestrator:
         benchmark: str,
         task_message: str,
         input_prediction_factor: float = 1.4,
+        max_tokens: int | None = None,
     ) -> SolutionOutput:
         start: float = time.perf_counter()
 
@@ -90,7 +91,9 @@ class Orchestrator:
                     error = f"output token limit ({self._max_output}) reached"
                     break
 
-            llm = self._manager.generate(messages, stop_sequences=self._stop)
+            llm = self._manager.generate(
+                messages, stop_sequences=self._stop, max_tokens=max_tokens
+            )
             if not llm.success:
                 error = f"LLM failed: {llm.error}"
                 break

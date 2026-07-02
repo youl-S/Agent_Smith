@@ -25,6 +25,7 @@ class LLMClient:
         api_key: str,
         messages: list[dict],
         stop_sequences: list[str] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
 
         client = OpenAI(
@@ -40,6 +41,7 @@ class LLMClient:
                 model=model,
                 messages=messages,
                 stop=stop_sequences or None,
+                max_tokens=max_tokens,
             )
 
         except openai.AuthenticationError as e:
