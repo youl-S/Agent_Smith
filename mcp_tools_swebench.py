@@ -3,8 +3,8 @@ import subprocess
 import os
 
 mcp = FastMCP("swebench-tools")
-TESTBED = "/testbed"  # code patch
 execute_containeur = None  # global mem (MCPToolSwe(id...))
+TESTBED = "/testbed"  # code patch
 
 
 # child (mcpswetoo) parent(agent-swe)
@@ -72,7 +72,7 @@ def containeur_sandbox():
         if execute_containeur is None:
             task_image, evaluation_script = load_config()
             print(load_config)
-            execute_containeur = DockerExec(task_image, evaluation_script)  # id
+            execute_containeur = DockerExec(task_image, evaluation_script)
             print(execute_containeur)
     except ValueError as e:
         print(e)
@@ -82,6 +82,9 @@ def containeur_sandbox():
 @mcp.tool()
 def read_file(filepath: str, start_line: int = 1, end_line: int = -1):
     execution_containeur = containeur_sandbox()
+    if execute_containeur is None:
+        return "Error init sandbox docker"
+
     cmd = execution_containeur.exec(f"cat {filepath}")
     if cmd.returncode != 0:
         return f"Error {cmd.stderr.strip()}"
@@ -93,7 +96,7 @@ def read_file(filepath: str, start_line: int = 1, end_line: int = -1):
     if end_line == -1:
         end_idx = lines_total
     else:
-        min(end_line, lines_total)
+        end_idx = min(end_line, lines_total)
 
     format_output = []
     for numbers, lines in enumerate(
@@ -114,7 +117,8 @@ def edit_file(filepath: str, old_str: str, new_str: str):
 @mcp.tool()
 def list_files(directory: str, pattern: str = "*"):
     execute_containeur = containeur_sandbox()
-    cmd = execute_containeur.exec(f"find {directory} -type f -name {pattern}")
+    cmd = execute_containeur.exec(f"find {directory} -type \
+                                  f -name {pattern}")
     if cmd.returncode != 0:
         return f"Error {cmd.stderr.strip()}"
     return cmd.stdout.strip()
@@ -153,22 +157,26 @@ def run_command(command: str, workdir: str = TESTBED):
 # git -c core.fileMode=false dif
 
 if __name__ == "__main__":
-    pass
-    test_img = "swebench/sweb.eval.x86_64.sympy_1776_sympy-18189:latest"
-    try:
-        testeur = DockerExec(test_img, eval_script="/testbed/eval.sh")
-        testeur.start_containeur()
-        show_img_on = subprocess.run(["docker", "images"],
-                                     capture_output=True, text=True)
-        print(show_img_on.stdout)
-        print()
-        print('exec create dir')
-        testeur.exec("mkdir theo")
-        ls = testeur.exec("ls -la")
-        print(ls.stdout)
-        print('')
+    os.environ["SWE_DOCKER_IMG"] = "swebench/sweb.eval.x86_64.sympy_1776_sympy-18189:latest"
+    os.environ["SWE_EVAL_SCRIPT"] = "/testbed/eval.sh"
+    # try:
+    exec_test = containeur_sandbox()
+    tool_read = read_file("/testbed/sympy/__init__.py", 0, 10)
+    print(tool_read)
+    # testeur = DockerExec(test_img, eval_script="/testbed/eval.sh")
+    # testeur.start_containeur()
+    # show_img_on = subprocess.run(["docker", "images"],
+    #                              capture_output=True, text=True)
+    # print(show_img_on.stdout)
+    # print()
+    # print('exec create dir')
+    # testeur.exec("mkdir theo")
+    # ls = testeur.exec("ls -la")
+    # print(ls.stdout)
+    # print('')
+    if exec_test is not None:
         print('clean containeur')
-        testeur.clean_containeur()
+        exec_test.clean_containeur()
         print('clean Ok')
-    except subprocess.CalledProcessError as e:
-        print(f"error {e.stderr}")
+    # except subprocess.CalledProcessError as e:
+    #     print(f"error {e.stderr}")
