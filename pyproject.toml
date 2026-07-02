@@ -19,8 +19,6 @@ dependencies = [
 [project.scripts]
 sandbox = "srcs.sandbox.main:main"
 
-
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

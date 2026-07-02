@@ -2,9 +2,8 @@ import os
 import json
 
 from fire import Fire
-
 from dotenv import load_dotenv
-
+from pathlib import Path
 from srcs.models import MBPPTaskInput, SolutionOutput
 from srcs.sandbox.sandbox import Sandbox
 from srcs.llm import (
@@ -15,57 +14,39 @@ from srcs.llm import (
     Orchestrator,
 )
 
-# Provisional manual
-SANDBOX_MANUAL = (
-    "- run_tests(code, test_list, test_imports): run candidate code "
-    "against the given asserts; returns a PASS/FAIL report.\n"
-    "- final_answer(code): submit the final solution code and end the task."
-)
-
 
 def build_system_prompt(sandbox_manual: str) -> str:
-    """Return the full system prompt with the sandbox manual injected."""
     return f"""You are a coding agent that solves Python problems through a \
 Thought -> Code -> Observation loop.
 
 # Response format
-Each turn: write a brief Thought, then exactly ONE Python code block with
-exactly ONE tool call (either run_tests OR final_answer, never both),
-ending with <end_code>.
+Each turn: write a brief Thought, then exactly ONE Python code block ending \
+with <end_code>:
 
-You MUST call every tool with KEYWORD arguments only (name=value).
-Never use positional arguments.
-- Correct:   run_tests(code=code, test_list=tests, test_imports=[])
-- Incorrect: run_tests(code, tests, [])
-
-You will NOT see the result of run_tests if you call final_answer in the
-same block. You MUST wait for the run_tests Observation in the NEXT turn
-before calling final_answer.
+```python
+# your code here
+```
+<end_code>
 
 The code runs in a sandbox. You then receive an Observation and continue.
 
-# Sandbox manual
-The following tools are available as Python functions inside the sandbox:
+# Calling tools
+Call every tool with KEYWORD arguments only (name=value), never positional.
+- Correct:   final_answer(code=my_code)
+- Incorrect: final_answer(my_code)
 
+# Sandbox manual
 {sandbox_manual}
 
 # How to solve
 1. Write the solution function.
-2. You MUST call run_tests(...) at least once and see it PASS before
-   submitting. Never call final_answer without having run run_tests first.
-3. Once run_tests reports PASS, call final_answer(...) with the complete
-   solution.
+2. Optionally call run_tests(...) to check it before submitting. This is
+   recommended but not required.
+3. Call final_answer(code=...) with the complete solution to end the task.
+   You may call it directly if you are confident the solution is correct.
 
 # Example
-Thought: I write the function, then verify it with run_tests before submitting.
-```python
-code = "def add(a, b):\\n    return a + b"
-run_tests(code=code, test_list=["assert add(2, 3) == 5"], test_imports=[])
-```
-<end_code>
-
-(After observing PASS)
-Thought: Tests pass, I submit.
+Thought: Simple sum. I'm confident, so I submit directly.
 ```python
 final_answer(code="def add(a, b):\\n    return a + b")
 ```
@@ -74,13 +55,18 @@ final_answer(code="def add(a, b):\\n    return a + b")
 
 
 def build_task_message(task: MBPPTaskInput) -> str:
-    """Build the user message describing the MBPP task."""
-    tests = "\n".join(task.test_list)
+    """User message. Gives the real tests as copyable literals so the model
+    can pass them to run_tests if it chooses to."""
+    test_list_lit = json.dumps(task.test_list)
+    test_imports_lit = json.dumps(task.test_imports)
     return (
         f"Problem: {task.task_definition}\n\n"
         f"Function signature:\n{task.function_definition}\n\n"
-        f"Your solution must pass these tests:\n{tests}\n\n"
-        f"Write the function and submit it with final_answer."
+        f"If you want to check your solution, call run_tests like this:\n"
+        f"  run_tests(code=your_code, test_list={test_list_lit}, "
+        f"test_imports={test_imports_lit})\n\n"
+        f"When ready, call final_answer(code=your_code) with the working "
+        f"function as a string."
     )
 
 
@@ -113,19 +99,25 @@ def run_mbpp(
     sandbox = Sandbox()
     sandbox._launch_server("stdio", "python mcp_tools_mbpp.py")
 
-    orchestrator = Orchestrator(
-        manager=manager,
-        extractor=CodeExtractor,
-        sandbox=sandbox,
-        system_prompt=build_system_prompt(SANDBOX_MANUAL),
-        stop_sequences=["<end_code>"],
-        max_iterations=10,
-    )
-    return orchestrator.run(
-        task_id=str(task.task_id),
-        benchmark="mbpp",
-        task_message=build_task_message(task),
-    )
+    try:
+        orchestrator = Orchestrator(
+            manager=manager,
+            extractor=CodeExtractor,
+            sandbox=sandbox,
+            system_prompt=build_system_prompt(sandbox.get_man()),
+            stop_sequences=["<end_code>"],
+            max_iterations=10,
+        )
+        return orchestrator.run(
+            task_id=str(task.task_id),
+            benchmark="mbpp",
+            task_message=build_task_message(task),
+        )
+    finally:
+        try:
+            sandbox.mcp_client.close()
+        except Exception:
+            pass
 
 
 def run_mbpp_cli(
@@ -136,20 +128,27 @@ def run_mbpp_cli(
 ) -> None:
     try:
         with open(task_file, "r") as f:
-            file_content = f.read()
-
-        data = json.loads(file_content)
+            data = json.loads(f.read())
         task_input = MBPPTaskInput.model_validate(data)
-
-        solution_output = run_mbpp(task_input, model_name, provider_url)
-
-        print(json.dumps(solution_output.model_dump(), indent=4))
-
-        os.makedirs(os.path.dirname(output), exist_ok=True)
-        with open(output, "w") as f:
-            f.write(solution_output.model_dump_json(indent=4))
+        result = run_mbpp(task_input, model_name, provider_url)
     except Exception as e:
-        print(f"Error {e}")
+        result = SolutionOutput(
+            task_id=(
+                str(data.get("task_id", "unknown"))
+                if "data" in dir()
+                else "unknown"
+            ),
+            benchmark="mbpp",
+            success=False,
+            solution="",
+            error=f"agent crashed: {type(e).__name__}: {e}",
+        )
+
+    if output:
+        path = Path(output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(result.model_dump_json(indent=4))
+    print(result.model_dump_json(indent=4))
 
 
 def main() -> None:
