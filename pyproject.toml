@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 sandbox = "srcs.sandbox.main:main"
+agent_mbpp = "srcs.mbpp.agent_mbpp:main"
 
 [build-system]
 requires = ["hatchling"]
