@@ -1,0 +1,20 @@
+url provider openrouter_ai = "https://openrouter.ai/api/v1"
+url provider groq = "https://api.groq.com/openai/v1"
+url provider gemini = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+Modeles Groq:
+	- "meta-llama/llama-4-scout-17b-16e-instruct"
+	- "llama-3.3-70b-versatile" -> Cle API qui ne fonctionne pas 
+	- "qwen/qwen3.6-27b"
+	
+Modeles Openrouter:
+	- "deepseek/deepseek-v4-flash"
+	- "meta-llama/llama-4-maverick:fre"
+	
+	
+Modeles Gemini:
+	- "gemini-2.5-flash"
+	- "gemma-4-26b"
+	- "gemini-3.1-flash-lite"
+	- "gemini-3.5-flash"
+	- "gemini-3-flash-preview"
