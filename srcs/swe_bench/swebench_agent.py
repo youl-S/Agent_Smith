@@ -66,8 +66,11 @@ def build_task_message(task: SWEBenchTaskInput) -> str:
     if task.repo:
         parts.append(f"Repository: {task.repo}")
     parts.append(f"\nIssue:\n{task.problem_statement}")
+
     if task.hints_text:
-        parts.append(f"\nHints:\n{task.hints_text}")
+        truncated_hints = task.hints_text[:2000]
+        parts.append(f"\nHints:\n{truncated_hints}\n... [TRUNCATED]")
+
     parts.append(
         "\nExplore the codebase with the available tools, edit the files "
         "needed to fix the issue, and run the tests to verify your fix. "
@@ -191,6 +194,8 @@ def run_swebench_cli(
         path = Path(output)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(solution_output.model_dump_json(indent=4))
+    else:
+        print("WTF")
 
 
 def main() -> None:
@@ -198,4 +203,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"Error {e}")

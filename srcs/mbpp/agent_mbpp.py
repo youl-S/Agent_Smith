@@ -126,6 +126,7 @@ def run_mbpp_cli(
     model_name: str = None,
     provider_url: str = None,
 ) -> None:
+    """Run the MBPP agent CLI"""
     try:
         with open(task_file, "r") as f:
             data = json.loads(f.read())
@@ -148,7 +149,6 @@ def run_mbpp_cli(
         path = Path(output)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(result.model_dump_json(indent=4))
-    print(result.model_dump_json(indent=4))
 
 
 def main() -> None:
@@ -156,4 +156,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+
+    except Exception as e:
+        print(f"Error {e}")

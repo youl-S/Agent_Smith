@@ -3,6 +3,7 @@ import subprocess
 import sys
 import os
 import re
+import base64
 
 mcp = FastMCP("swebench-tools")
 execute_container = None
@@ -45,39 +46,44 @@ class DockerExec:
         self.id_container: str | None = None
 
     def start_container(self) -> None:
-        """Start the Docker container if it is not already running.
+        """Start the Docker container if not already running.
 
-        Uses the configured task image to launch a detached container
-        that sleeps indefinitely, allowing subsequent
-        command execution via docker exec.
+        Launches a detached container from the task image that sleeps
+        forever, so commands can be run with `docker exec`. Raises
+        RuntimeError if the container cannot be started.
         """
         if self.id_container:
             return
 
-        run_docker = subprocess.run(
-            [
-                "docker",
-                "run",
-                "--network",
-                "none",
-                "-d",
-                self.task_image,
-                "sleep",
-                "infinity",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        try:
+            run_docker = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--network",
+                    "none",
+                    "-d",
+                    self.task_image,
+                    "sleep",
+                    "infinity",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"docker run failed: {e.stderr.strip()}") from e
+        except FileNotFoundError as e:
+            raise RuntimeError("docker not found on PATH") from e
 
-        if run_docker.returncode != 0:
-            print(f"Error {run_docker.stderr.strip()}")
+        self.id_container = run_docker.stdout.strip()
 
-        self.id_container = run_docker.stdout.strip("\n")
-
-    def exec(self, cmd_exec: str,
-             work_dir: str = TESTBED,
-             timeout: int | None = None):
+    def exec(
+        self,
+        cmd_exec: str,
+        work_dir: str = TESTBED,
+        timeout: int = 300,
+    ):
         """Execute a command inside the managed Docker container.
 
         Args:
@@ -89,10 +95,9 @@ class DockerExec:
             The completed subprocess result or a mock timeout object.
         """
         self.start_container()
-        assert self.id_container is not None
 
-        # if not self.id_container:
-        #     raise ValueError("Cannot find id_container")
+        assert self.id_container is not None and self.id_container
+
         exec_bash = [
             "docker",
             "exec",
@@ -103,28 +108,13 @@ class DockerExec:
             "-c",
             cmd_exec,
         ]
-        try:
-            container_exec = subprocess.run(
-                exec_bash,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            return container_exec
-        except subprocess.TimeoutError:
-
-            class MokTimeOut:
-                return_code_err = -1
-                stdout = ""
-                stderr = "time out Fail commande execution"
-
-            return MokTimeOut()
-        # ici les gars je simule une timeout Error pour que le llm le capte
-        # que ca time out (run_tests)
-        # pour pas faire crash le serv mcp\ et feedback au llm ce qui se passe
-        # avec le log erreur pour son observation
-
-        # courrage la correction appeler si besoin !!!!
+        container_exec = subprocess.run(
+            exec_bash,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return container_exec
 
     def clean_container(self) -> None:
         """Remove the managed Docker container if one exists.
@@ -136,22 +126,16 @@ class DockerExec:
             subprocess.run(["docker", "rm", "-f", self.id_container])
 
 
-def container_sandbox():
-    """Initialize and return the shared Docker sandbox instance.
-
-    This helper creates a DockerExec object once and reuses it for subsequent
-    calls. If the configuration cannot be loaded, it prints the error and
-    returns None.
-    """
+def container_sandbox() -> DockerExec | str:
+    """Return the shared sandbox, or a FAIL message if config is missing."""
     global execute_container
+    if execute_container is not None:
+        return execute_container
     try:
-        if execute_container is None:
-            task_image, evaluation_script = load_config()
-            print(load_config)
-            execute_container = DockerExec(task_image, evaluation_script)
-            print(execute_container)
+        task_image, evaluation_script = load_config()
     except ValueError as e:
-        print(e)
+        return f"FAIL sandbox init: {e}"
+    execute_container = DockerExec(task_image, evaluation_script)
     return execute_container
 
 
@@ -165,33 +149,35 @@ def read_file(filepath: str, start_line: int = 1, end_line: int = -1):
         end_line: Last line number to include, or -1 for all lines.
 
     Returns:
-        Numbered file contents or an error message.
+        Numbered file contents (like `cat -n`) or a FAIL message.
     """
     get_container = container_sandbox()
-    if get_container is None:
-        return "FAIL init sandbox docker"
+    if isinstance(get_container, str):
+        return get_container
 
-    res = get_container.exec(f"cat {filepath}")
+    try:
+        res = get_container.exec(f"cat {filepath}")
+    except subprocess.TimeoutExpired:
+        return f"FAIL reading {filepath}: timed out"
+    except Exception as e:
+        return f"FAIL reading {filepath}: {type(e).__name__}: {e}"
+
     if res.returncode != 0:
         return f"FAIL {res.stderr.strip()}"
 
-    get_line = res.stdout.splitlines()
-    lines_total = len(get_line)
+    all_lines = res.stdout.splitlines()
+    total = len(all_lines)
 
     start_idx = max(0, start_line - 1)
-    if end_line == -1:
-        end_idx = lines_total
-    else:
-        end_idx = min(end_line, lines_total)
+    end_idx = total if end_line == -1 else min(end_line, total)
 
-    format_output = []
-    for numbers, lines in enumerate(
-            get_line[start_idx:end_idx], start=start_line
-            ):
-        format_output.append(f"{numbers}: {lines}")
-    if not format_output:
-        return "FAIL File is empty"
-    return "\n".join(format_output)
+    selected = all_lines[start_idx:end_idx]
+    if not selected:
+        return f"FAIL no lines in range {start_line}-{end_line} ({filepath})"
+
+    return "\n".join(
+        f"{n}: {line}" for n, line in enumerate(selected, start=start_line)
+    )
 
 
 @mcp.tool()
@@ -207,22 +193,33 @@ def edit_file(filepath: str, old_str: str, new_str: str):
         "PASS" on success, or an error string if the operation fails.
     """
     get_container = container_sandbox()
-    if get_container is None:
-        return "FAIL init sandbox docker"
 
-    res = get_container.exec(f"cat {filepath}")
-    if res.returncode != 0:
-        return f"FAIL {res.stderr.strip()}"
+    if isinstance(get_container, str):
+        return get_container
 
-    content = res.stdout.strip()
+    try:
+        res = get_container.exec(f"cat {filepath}")
+        if res.returncode != 0:
+            return f"FAIL {res.stderr.strip()}"
+
+    except Exception as e:
+        return f"FAIL reading {filepath}: {type(e).__name__}: {e}"
+
+    content = res.stdout
 
     if old_str not in content:
         return f"FAIL {old_str} not found in {filepath}"
     content = content.replace(old_str, new_str, 1)
 
-    res = get_container.exec(f"cat > {filepath} << 'EOF'\n{content}\nEOF")
-    if res.returncode != 0:
-        return f"FAIL {res.stderr.strip()}"
+    encoded = base64.b64encode(content.encode()).decode()
+    try:
+        res = get_container.exec(f"echo '{encoded}' | base64 -d > {filepath}")
+        if res.returncode != 0:
+            return f"FAIL writing {filepath}: {res.stderr.strip()}"
+
+    except Exception as e:
+        return f"FAIL writing {filepath}: {type(e).__name__}: {e}"
+
     return "PASS"
 
 
@@ -238,15 +235,24 @@ def list_files(directory: str, pattern: str = "*"):
         A string with matching file paths separated by newlines, or an error.
     """
     get_container = container_sandbox()
-    if get_container is None:
-        return "FAIL init sandbox docker"
 
-    res = get_container.exec(f"find '{directory}' -type f -name '{pattern}'")
-    if res.returncode != 0:
-        return f"FAIL {res.stderr.strip()}"
+    if isinstance(get_container, str):
+        return get_container
 
-    list_files = res.stdout.strip()
-    return list_files
+    try:
+        res = get_container.exec(
+            f"find '{directory}' -type f -name '{pattern}'"
+        )
+        if res.returncode != 0:
+            return f"FAIL {res.stderr.strip()}"
+    except Exception as e:
+        return f"FAIL listing {directory}: {type(e).__name__}: {e}"
+
+    result = res.stdout
+
+    if not result.strip():
+        return f"FAIL in {directory}: no files with the pattern {pattern}"
+    return result
 
 
 @mcp.tool()
@@ -261,20 +267,24 @@ def search_code(pattern: str, file_pattern: str = "*"):
         Matching lines with file paths and line numbers, or an error message.
     """
     get_container = container_sandbox()
-    if get_container is None:
-        return "FAIL init sandbox docker"
 
-    res = get_container.exec(
-        f"grep -rn --include='{file_pattern}' -- '{pattern}' {TESTBED}"
-    )
+    if isinstance(get_container, str):
+        return get_container
 
-    if res.returncode == 1:
-        ERROR_MSG = f"FAIL no matches found for pattern '{pattern}'"
-        ERROR_MSG += f"(file_pattern='{file_pattern}') in {TESTBED}"
-        return ERROR_MSG
+    try:
+        res = get_container.exec(
+            f"grep -rn --include='{file_pattern}' -- '{pattern}' {TESTBED}"
+        )
 
-    if res.returncode != 0:
-        return f"FAIL {res.stderr.strip()}"
+        if res.returncode == 1:
+            ERROR_MSG = f"FAIL no matches found for pattern '{pattern}'"
+            ERROR_MSG += f"(file_pattern='{file_pattern}') in {TESTBED}"
+            return ERROR_MSG
+
+        if res.returncode != 0:
+            return f"FAIL {res.stderr.strip()}"
+    except Exception as e:
+        return f"FAIL searching '{pattern}': {type(e).__name__}: {e}"
 
     search_code = res.stdout.strip()
     return search_code
@@ -287,59 +297,108 @@ def search_function_or_class_definition_in_code(name: str):
     Returns the first matching line with file path and line number.
     """
     get_container = container_sandbox()
-    if get_container is None:
-        return "FAIL init sandbox docker"
+
+    if isinstance(get_container, str):
+        return get_container
 
     escaped_name = re.escape(name)
     grep_pattern = rf"^[[:space:]]*(def|class)[[:space:]]+{escaped_name}\b"
 
-    res = get_container.exec(
-        f"grep -rnE --include='*.py' -- '{grep_pattern}' {TESTBED}"
-    )
+    try:
+        res = get_container.exec(
+            f"grep -rnE --include='*.py' -- '{grep_pattern}' {TESTBED}"
+        )
 
-    if res.returncode == 1:
-        return f"FAIL no functions or class name {name}"
+        if res.returncode == 1:
+            return f"FAIL no functions or class name {name}"
 
-    if res.returncode != 0:
-        return f"FAIL {res.stderr.strip()}"
+        if res.returncode != 0:
+            return f"FAIL {res.stderr.strip()}"
+    except Exception as e:
+        return f"FAIL searching definition '{name}': {type(e).__name__}: {e}"
 
-    first_match = res.stdout.strip().splitlines()[0]
+    lines = res.stdout.strip().splitlines()
+    if not lines:
+        return f"FAIL no definition found for {name}"
+
+    first_match = lines[0]
     return first_match
 
 
 @mcp.tool()
 def find_references(name: str, filepath: str, line: str):
-    pass
+    """Find all usages of a symbol (function or class).
+
+    Args:
+        name: The symbol name to find references for.
+        filepath: Path of the file where the symbol appears.
+        line: Line number where the symbol appears (as a string).
+
+    Returns:
+        Matching lines with file paths and line numbers (same format as
+        search_code), or a FAIL message if none are found.
+    """
+    get_container = container_sandbox()
+    if isinstance(get_container, str):
+        return get_container
+
+    escaped_name = re.escape(name)
+    grep_pattern = rf"\b{escaped_name}\b"
+
+    try:
+        res = get_container.exec(
+            f"grep -rnE --include='*.py' -- '{grep_pattern}' {TESTBED}"
+        )
+
+        if res.returncode == 1:
+            return f"FAIL no references found for {name}"
+
+        if res.returncode != 0:
+            return f"FAIL {res.stderr.strip()}"
+    except Exception as e:
+        return f"FAIL finding references '{name}': {type(e).__name__}: {e}"
+
+    references = res.stdout.strip()
+
+    MAX_CHARS = 10000
+    if len(references) > MAX_CHARS:
+        references = references[:MAX_CHARS] + "\n[truncated]"
+    return references
 
 
 @mcp.tool()
 def run_tests():
-    """Run the configured test script inside the sandbox container.
+    """Run the evaluation test suite and return its raw output.
 
-    Returns:
-        The combined stdout/stderr output from the test execution, or an
-        error string if sandbox initialization or configuration loading fails.
+    No arguments. Read the output to see which tests pass or fail, then
+    keep editing until they pass. A non-zero exit code is normal when tests
+    fail; output is returned either way. Long output is truncated.
     """
-    get_containeur = container_sandbox()
-    if get_containeur is None:
-        return "FAIL init sandbox docker "
+    get_container = container_sandbox()
+    if isinstance(get_container, str):
+        return get_container
 
     try:
         _, eval_script = load_config()
     except ValueError as e:
-        return f"Error loading conf {e}"
-    res = get_containeur.exec(f"bash {eval_script}", timeout=900)
+        return f"FAIL loading config: {e}"
 
+    try:
+        res = get_container.exec(f"bash {eval_script}", timeout=900)
+    except subprocess.TimeoutExpired:
+        return "FAIL tests timed out after 900s"
+    except Exception as e:
+        return f"FAIL could not run tests: {type(e).__name__}: {e}"
     output = []
     if res.stdout:
-        output.append(f"{res.stdout.strip()}")
+        output.append(res.stdout.strip())
     if res.stderr:
-        output.append(f"{res.stderr.strip()}")
-    run_output = "\n.\n".join(output)
+        output.append(res.stderr.strip())
+    run_output = "\n.\n".join(output) if output else "(no test output)"
 
-    MAX_TOKEN = 15000
-    if len(run_output) > MAX_TOKEN:
-        run_output = "Truncate output limited" + run_output[-MAX_TOKEN:]
+    MAX_CHARS = 15000
+    if len(run_output) > MAX_CHARS:
+        run_output = "[output truncated]\n" + run_output[-MAX_CHARS:]
     return run_output
 
 
@@ -354,15 +413,20 @@ def get_patch():
         An error string if sandbox initialization or git diff fails.
     """
     get_container = container_sandbox()
-    if get_container is None:
-        return "FAIL init sandbox docker"
-    res = get_container.exec("git -c core.fileMode=false diff")
-    if res.returncode != 0:
-        return f"FAIL {res.stderr.strip()}"
+
+    if isinstance(get_container, str):
+        return get_container
+
+    try:
+        res = get_container.exec("git -c core.fileMode=false diff")
+        if res.returncode != 0:
+            return f"FAIL {res.stderr.strip()}"
+    except Exception as e:
+        return f"FAIL getting patch: {type(e).__name__}: {e}"
 
     patch = res.stdout.strip()
     if not patch:
-        return "No modifications in the git repository."
+        return "FAIL No modifications in the git repository."
     return patch
 
 
@@ -375,23 +439,29 @@ def run_command(command: str, workdir: str = TESTBED):
         workdir: Working directory path inside the sandbox container.
 
     Returns:
-        A dictionary containing stdout, stderr, and exit code.
+        A text report with stdout, stderr and the exit code, or a FAIL
+        string if the command could not be run.
     """
-    execution_container = container_sandbox()
-    if execution_container is None:
-        return "FAIL init sandbox docker"
+    get_container = container_sandbox()
+    if isinstance(get_container, str):
+        return get_container
 
-    res = execution_container.exec(command, workdir)
-    result = {
-        "stdout": res.stdout.strip(),
-        "stderr": res.stderr.strip(),
-        "exit code": res.returncode,
-    }
-    return result
+    try:
+        res = get_container.exec(command, workdir)
+    except subprocess.TimeoutExpired:
+        return "FAIL command timed out"
+    except Exception as e:
+        return f"FAIL running command: {type(e).__name__}: {e}"
+
+    return (
+        f"exit_code: {res.returncode}\n"
+        f"stdout:\n{res.stdout.strip()}\n"
+        f"stderr:\n{res.stderr.strip()}"
+    )
 
 
 def main():
-    if '--http' in sys.argv:
+    if "--http" in sys.argv:
         mcp.run(transport="streamable-http")
     else:
         mcp.run(transport="stdio")

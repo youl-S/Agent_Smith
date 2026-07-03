@@ -32,6 +32,21 @@ class Orchestrator:
         max_time_seconds: float = 120.0,
         safety_margin: float = 0.9,
     ) -> None:
+        """Initialize the orchestrator.
+
+        Args:
+            manager: LLM manager used to generate each response.
+            extractor: CodeExtractor class used to parse the LLM output.
+            sandbox: Sandbox exposing run(code) -> dict for execution.
+            system_prompt: Full system prompt, already built by the caller.
+            stop_sequences: Stop sequences for generation (default
+                ["<end_code>"]).
+            max_iterations: Maximum number of agent loop iterations.
+            max_input_tokens: Cumulative input token budget for the task.
+            max_output_tokens: Cumulative output token budget for the task.
+            max_time_seconds: Wall-clock time budget for the task.
+            safety_margin: Fraction of each limit at which to stop early.
+        """
         self._manager: LLMManager = manager
         self._extractor: type[CodeExtractor] = extractor
         self._sandbox: object = sandbox
@@ -51,6 +66,24 @@ class Orchestrator:
         input_prediction_factor: float = 1.4,
         max_tokens: int | None = None,
     ) -> SolutionOutput:
+        """Run the Thought -> Code -> Observation loop until the task ends.
+
+        Each iteration checks the time/token budgets, generates a response,
+        extracts and runs the code, records a StepMetrics, and feeds the
+        observation back into the conversation. Stops when the sandbox
+        signals final_answer, a limit is reached, or the LLM fails.
+
+        Args:
+            task_id: Identifier of the task, stored in the output.
+            benchmark: Benchmark name ('mbpp' or 'swebench').
+            task_message: The user message describing the task.
+            input_prediction_factor: Multiplier used to estimate the next
+                turn's token cost when checking budgets early.
+            max_tokens: Optional per-call output token cap passed to the LLM.
+
+        Returns:
+            A SolutionOutput with the solution, per-step metrics and totals.
+        """
         start: float = time.perf_counter()
 
         messages: list[dict[str, str]] = [
