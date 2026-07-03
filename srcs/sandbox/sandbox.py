@@ -165,7 +165,6 @@ class Sandbox:
                 {
                     "type": "final_answer",
                     "answer": answer.args[0],
-
                 }
             )
         except Exception:
@@ -252,7 +251,7 @@ class Sandbox:
                 to_truncate = total_len - 6000
                 result = field[:3000]
                 result += "{{ Tool output was truncated due to size limits }}"
-                result += field[3000 + to_truncate :]
+                result += field[3000 + to_truncate:]
             return result
 
         if output.get("stdout") and len(output["stdout"]) > 3000:
@@ -343,21 +342,6 @@ it with a bare `except`.
 
         prompts = self.mcp_client.list_prompts()
         resources = self.mcp_client.list_resources()
-        # template = template.replace(
-        #     "{{AUTHORIZED_IMPORTS}}",
-        #     ", ".join(self._config.authorized_imports),
-        # )
-        # template = template.replace(
-        #     "{{ALLOWED_DIRECTORIES}}",
-        #     ", ".join(self._config.allowed_directories),
-        # )
-        # template = template.replace(
-        #     "{{MAX_MEMORY_MB}}", str(self._config.max_memory_mb)
-        # )
-        # template = template.replace(
-        #     "{{MAX_EXECUTION_TIME}}",
-        #     str(self._config.max_execution_time_seconds),
-        # )
         template = template.replace("{{TOOLS}}", self.get_clean_tools())
         template = template.replace("{{PROMPTS}}", str(prompts))
         template = template.replace("{{RESOURCES}}", str(resources))
