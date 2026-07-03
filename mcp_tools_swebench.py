@@ -1,37 +1,58 @@
 from mcp.server.fastmcp import FastMCP
 import subprocess
+import sys
 import os
 import re
 
 mcp = FastMCP("swebench-tools")
-execute_container = None  # global mem (MCPToolSwe(id...))
-TESTBED = "/testbed"  # code patch
+execute_container = None
+TESTBED = "/testbed"
 
 
-# child (mcpswetoo) parent(agent-swe)
 def load_config() -> tuple[str, str]:
-    task_image = os.getenv("SWE_DOCKER_IMG")  # from agent set environ()
+    """Load required environment configuration for the Docker sandbox.
+
+    Reads SWE_DOCKER_IMG and SWE_EVAL_SCRIPT from the environment and
+    returns them as a tuple. Raises ValueError when either variable is missing.
+    """
+    task_image = os.getenv("SWE_DOCKER_IMG")
     if not task_image:
         raise ValueError("Error missing image docker")
-
     eval_script = os.getenv("SWE_EVAL_SCRIPT")
     if not eval_script:
         raise ValueError("Error missing script to evaluate")
 
-    print(task_image, eval_script)
     return task_image, eval_script
 
 
 class DockerExec:
-    def __init__(self, task_image, eval_script) -> None:
+    """Manage execution of commands inside a Docker sandbox container.
+
+    This class launches a detached Docker container from the configured task
+    image and provides a simple interface for executing commands inside that
+    container. It also offers cleanup of the container when no longer needed.
+    """
+
+    def __init__(self, task_image: str, eval_script: str) -> None:
+        """Initialize the DockerExec manager.
+
+        Args:
+            task_image: Docker image name used to create the sandbox.
+            eval_script: Path to the evaluation script inside the container.
+        """
         self.task_image = task_image
         self.eval_script = eval_script
-        self.id_container: str | None = None  # remplir
+        self.id_container: str | None = None
 
     def start_container(self) -> None:
+        """Start the Docker container if it is not already running.
+
+        Uses the configured task image to launch a detached container
+        that sleeps indefinitely, allowing subsequent
+        command execution via docker exec.
+        """
         if self.id_container:
-            return  # pas de start si on a deja pull (Django..)
-        # aucun reseau d arriere plan (None)
+            return
 
         run_docker = subprocess.run(
             [
@@ -44,25 +65,34 @@ class DockerExec:
                 "sleep",
                 "infinity",
             ],
-            capture_output=True,  # catch
+            capture_output=True,
             text=True,
             check=True,
-        )  # print
+        )
 
         if run_docker.returncode != 0:
-            print("error")
+            print(f"Error {run_docker.stderr.strip()}")
 
         self.id_container = run_docker.stdout.strip("\n")
 
-        # print(self.id_container)
+    def exec(self, cmd_exec: str,
+             work_dir: str = TESTBED,
+             timeout: int | None = None):
+        """Execute a command inside the managed Docker container.
 
-    def exec(self, cmd_exec: str, work_dir: str = TESTBED):
-        # for exec cmd tool
-        self.start_container()  # si un container est present
+        Args:
+            cmd_exec: Command string to run inside the container.
+            work_dir: Working directory inside the container.
+            timeout: Optional timeout in seconds for the command.
+
+        Returns:
+            The completed subprocess result or a mock timeout object.
+        """
+        self.start_container()
         assert self.id_container is not None
 
-        if not self.id_container:
-            raise ValueError("Cannot find id_container")
+        # if not self.id_container:
+        #     raise ValueError("Cannot find id_container")
         exec_bash = [
             "docker",
             "exec",
@@ -73,21 +103,46 @@ class DockerExec:
             "-c",
             cmd_exec,
         ]
-        container_exec = subprocess.run(
-            exec_bash, capture_output=True, text=True
-        )
-        return container_exec
+        try:
+            container_exec = subprocess.run(
+                exec_bash,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            return container_exec
+        except subprocess.TimeoutError:
+
+            class MokTimeOut:
+                return_code_err = -1
+                stdout = ""
+                stderr = "time out Fail commande execution"
+
+            return MokTimeOut()
+        # ici les gars je simule une timeout Error pour que le llm le capte
+        # que ca time out (run_tests)
+        # pour pas faire crash le serv mcp\ et feedback au llm ce qui se passe
+        # avec le log erreur pour son observation
+
+        # courrage la correction appeler si besoin !!!!
 
     def clean_container(self) -> None:
+        """Remove the managed Docker container if one exists.
+
+        The container is removed forcefully to ensure the sandbox is cleaned
+        up even if the container is still running.
+        """
         if self.id_container:
             subprocess.run(["docker", "rm", "-f", self.id_container])
 
 
-# read ... (exec avec docker chaques cmd dans un container)
-
-
-# for execute into container
 def container_sandbox():
+    """Initialize and return the shared Docker sandbox instance.
+
+    This helper creates a DockerExec object once and reuses it for subsequent
+    calls. If the configuration cannot be loaded, it prints the error and
+    returns None.
+    """
     global execute_container
     try:
         if execute_container is None:
@@ -102,15 +157,25 @@ def container_sandbox():
 
 @mcp.tool()
 def read_file(filepath: str, start_line: int = 1, end_line: int = -1):
-    execution_container = container_sandbox()
-    if execution_container is None:
+    """Read a file from the sandbox container and return requested lines.
+
+    Args:
+        filepath: Path to the file inside the sandbox container.
+        start_line: First line number to include, 1-based.
+        end_line: Last line number to include, or -1 for all lines.
+
+    Returns:
+        Numbered file contents or an error message.
+    """
+    get_container = container_sandbox()
+    if get_container is None:
         return "FAIL init sandbox docker"
 
-    cmd = execution_container.exec(f"cat {filepath}")
-    if cmd.returncode != 0:
-        return f"FAIL {cmd.stderr.strip()}"
+    res = get_container.exec(f"cat {filepath}")
+    if res.returncode != 0:
+        return f"FAIL {res.stderr.strip()}"
 
-    get_line = cmd.stdout.splitlines()
+    get_line = res.stdout.splitlines()
     lines_total = len(get_line)
 
     start_idx = max(0, start_line - 1)
@@ -121,8 +186,8 @@ def read_file(filepath: str, start_line: int = 1, end_line: int = -1):
 
     format_output = []
     for numbers, lines in enumerate(
-        get_line[start_idx:end_idx], start=start_line
-    ):
+            get_line[start_idx:end_idx], start=start_line
+            ):
         format_output.append(f"{numbers}: {lines}")
     if not format_output:
         return "FAIL File is empty"
@@ -131,81 +196,114 @@ def read_file(filepath: str, start_line: int = 1, end_line: int = -1):
 
 @mcp.tool()
 def edit_file(filepath: str, old_str: str, new_str: str):
-    execution_container = container_sandbox()
-    if execution_container is None:
+    """Replace the first occurrence of a string in a file inside the sandbox.
+
+    Args:
+        filepath: Path to the file inside the sandbox container.
+        old_str: Text to replace.
+        new_str: Replacement text.
+
+    Returns:
+        "PASS" on success, or an error string if the operation fails.
+    """
+    get_container = container_sandbox()
+    if get_container is None:
         return "FAIL init sandbox docker"
 
-    cmd = execution_container.exec(f"cat {filepath}")
-    if cmd.returncode != 0:
-        return f"FAIL {cmd.stderr.strip()}"
+    res = get_container.exec(f"cat {filepath}")
+    if res.returncode != 0:
+        return f"FAIL {res.stderr.strip()}"
 
-    content = cmd.stdout.strip()
+    content = res.stdout.strip()
 
     if old_str not in content:
         return f"FAIL {old_str} not found in {filepath}"
     content = content.replace(old_str, new_str, 1)
 
-    cmd = execution_container.exec(
-        f"cat > {filepath} << 'EOF'\n{content}\nEOF"
-    )
-    if cmd.returncode != 0:
-        return f"FAIL {cmd.stderr.strip()}"
+    res = get_container.exec(f"cat > {filepath} << 'EOF'\n{content}\nEOF")
+    if res.returncode != 0:
+        return f"FAIL {res.stderr.strip()}"
     return "PASS"
 
 
 @mcp.tool()
 def list_files(directory: str, pattern: str = "*"):
-    execution_container = container_sandbox()
-    if execution_container is None:
+    """List files under a directory matching a glob pattern.
+
+    Args:
+        directory: Directory to search.
+        pattern: Filename glob pattern to match.
+
+    Returns:
+        A string with matching file paths separated by newlines, or an error.
+    """
+    get_container = container_sandbox()
+    if get_container is None:
         return "FAIL init sandbox docker"
 
-    cmd = execution_container.exec(
-        f"find '{directory}' -type f -name '{pattern}'"
-    )
-    if cmd.returncode != 0:
-        return f"FAIL {cmd.stderr.strip()}"
-    return cmd.stdout.strip()
+    res = get_container.exec(f"find '{directory}' -type f -name '{pattern}'")
+    if res.returncode != 0:
+        return f"FAIL {res.stderr.strip()}"
+
+    list_files = res.stdout.strip()
+    return list_files
 
 
 @mcp.tool()
 def search_code(pattern: str, file_pattern: str = "*"):
-    execution_container = container_sandbox()
-    if execution_container is None:
+    """Search files in the testbed for a pattern.
+
+    Args:
+        pattern: The search string or regex to pass to grep.
+        file_pattern: Glob pattern to limit which files are searched.
+
+    Returns:
+        Matching lines with file paths and line numbers, or an error message.
+    """
+    get_container = container_sandbox()
+    if get_container is None:
         return "FAIL init sandbox docker"
 
-    cmd = execution_container.exec(
+    res = get_container.exec(
         f"grep -rn --include='{file_pattern}' -- '{pattern}' {TESTBED}"
     )
 
-    if cmd.returncode == 1:
-        return f"FAIL no matches found for pattern '{pattern}' (file_pattern='{file_pattern}') in {TESTBED}"
+    if res.returncode == 1:
+        ERROR_MSG = f"FAIL no matches found for pattern '{pattern}'"
+        ERROR_MSG += f"(file_pattern='{file_pattern}') in {TESTBED}"
+        return ERROR_MSG
 
-    if cmd.returncode != 0:
-        return f"FAIL {cmd.stderr.strip()}"
+    if res.returncode != 0:
+        return f"FAIL {res.stderr.strip()}"
 
-    return cmd.stdout.strip()
+    search_code = res.stdout.strip()
+    return search_code
 
 
 @mcp.tool()
 def search_function_or_class_definition_in_code(name: str):
-    execution_container = container_sandbox()
-    if execution_container is None:
+    """Search Python files for a function or class definition by name.
+
+    Returns the first matching line with file path and line number.
+    """
+    get_container = container_sandbox()
+    if get_container is None:
         return "FAIL init sandbox docker"
 
     escaped_name = re.escape(name)
     grep_pattern = rf"^[[:space:]]*(def|class)[[:space:]]+{escaped_name}\b"
 
-    cmd = execution_container.exec(
+    res = get_container.exec(
         f"grep -rnE --include='*.py' -- '{grep_pattern}' {TESTBED}"
     )
 
-    if cmd.returncode == 1:
+    if res.returncode == 1:
         return f"FAIL no functions or class name {name}"
 
-    if cmd.returncode != 0:
-        return f"FAIL {cmd.stderr.strip()}"
+    if res.returncode != 0:
+        return f"FAIL {res.stderr.strip()}"
 
-    first_match = cmd.stdout.strip().splitlines()[0]
+    first_match = res.stdout.strip().splitlines()[0]
     return first_match
 
 
@@ -216,54 +314,88 @@ def find_references(name: str, filepath: str, line: str):
 
 @mcp.tool()
 def run_tests():
-    pass
+    """Run the configured test script inside the sandbox container.
+
+    Returns:
+        The combined stdout/stderr output from the test execution, or an
+        error string if sandbox initialization or configuration loading fails.
+    """
+    get_containeur = container_sandbox()
+    if get_containeur is None:
+        return "FAIL init sandbox docker "
+
+    try:
+        _, eval_script = load_config()
+    except ValueError as e:
+        return f"Error loading conf {e}"
+    res = get_containeur.exec(f"bash {eval_script}", timeout=900)
+
+    output = []
+    if res.stdout:
+        output.append(f"{res.stdout.strip()}")
+    if res.stderr:
+        output.append(f"{res.stderr.strip()}")
+    run_output = "\n.\n".join(output)
+
+    MAX_TOKEN = 15000
+    if len(run_output) > MAX_TOKEN:
+        run_output = "Truncate output limited" + run_output[-MAX_TOKEN:]
+    return run_output
 
 
 @mcp.tool()
 def get_patch():
-    pass
+    """
+    Get the current git diff patch from inside the sandbox container.
+
+    Returns:
+        The patch text if modifications exist.
+        A message indicating no modifications if the repository is clean.
+        An error string if sandbox initialization or git diff fails.
+    """
+    get_container = container_sandbox()
+    if get_container is None:
+        return "FAIL init sandbox docker"
+    res = get_container.exec("git -c core.fileMode=false diff")
+    if res.returncode != 0:
+        return f"FAIL {res.stderr.strip()}"
+
+    patch = res.stdout.strip()
+    if not patch:
+        return "No modifications in the git repository."
+    return patch
 
 
 @mcp.tool()
 def run_command(command: str, workdir: str = TESTBED):
+    """Execute a shell command inside the sandbox container.
+
+    Args:
+        command: Command string to execute.
+        workdir: Working directory path inside the sandbox container.
+
+    Returns:
+        A dictionary containing stdout, stderr, and exit code.
+    """
     execution_container = container_sandbox()
     if execution_container is None:
         return "FAIL init sandbox docker"
 
-    cmd = execution_container.exec(command, workdir)
+    res = execution_container.exec(command, workdir)
     result = {
-        "stdout": cmd.stdout.strip(),
-        "stderr": cmd.stderr.strip(),
-        "exit code": cmd.returncode,
+        "stdout": res.stdout.strip(),
+        "stderr": res.stderr.strip(),
+        "exit code": res.returncode,
     }
     return result
 
 
-# git -c core.fileMode=false dif
+def main():
+    if '--http' in sys.argv:
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run(transport="stdio")
+
 
 if __name__ == "__main__":
-    os.environ["SWE_DOCKER_IMG"] = (
-        "swebench/sweb.eval.x86_64.sympy_1776_sympy-18189:latest"
-    )
-    os.environ["SWE_EVAL_SCRIPT"] = "/testbed/eval.sh"
-    # try:
-    exec_test = container_sandbox()
-    tool_read = read_file("/testbed/sympy/__init__.py", 0, 10)
-    print(tool_read)
-    # testeur = DockerExec(test_img, eval_script="/testbed/eval.sh")
-    # testeur.start_container()
-    # show_img_on = subprocess.run(["docker", "images"],
-    #                              capture_output=True, text=True)
-    # print(show_img_on.stdout)
-    # print()
-    # print('exec create dir')
-    # testeur.exec("mkdir theo")
-    # ls = testeur.exec("ls -la")
-    # print(ls.stdout)
-    # print('')
-    if exec_test is not None:
-        print("clean container")
-        exec_test.clean_container()
-        print("clean Ok")
-    # except subprocess.CalledProcessError as e:
-    #     print(f"error {e.stderr}")
+    main()
