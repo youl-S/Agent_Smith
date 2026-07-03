@@ -1,5 +1,6 @@
 import time
 
+from collections.abc import Callable
 from srcs.models import StepMetrics, SolutionOutput
 from srcs.llm.manager import LLMManager
 from srcs.llm.code_extractor import CodeExtractor
@@ -65,6 +66,7 @@ class Orchestrator:
         task_message: str,
         input_prediction_factor: float = 1.4,
         max_tokens: int | None = None,
+        validate_answer: Callable | None = None,
     ) -> SolutionOutput:
         """Run the Thought -> Code -> Observation loop until the task ends.
 
@@ -151,10 +153,16 @@ class Orchestrator:
 
                 if result["type"] == "final_answer":
                     solution = result["answer"]
-                    observation = (
-                        result.get("stdout", "") or "final_answer received"
-                    )
-                    success = True
+                    if validate_answer is not None:
+                        last_test = validate_answer(solution)
+                        if last_test:
+                            observation = last_test
+                            success = False
+                    else:
+                        observation = (
+                            result.get("stdout", "") or "final_answer received"
+                        )
+                        success = True
                 else:
                     parts = [
                         result.get("stdout", ""),
