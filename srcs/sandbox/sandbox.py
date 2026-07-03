@@ -1,6 +1,7 @@
 from srcs.models import SandboxConfig
 from srcs.sandbox.mcp_client import McpClient
 from pathlib import Path
+from mcp import Tool
 from typing import Any, Callable
 import multiprocessing
 import builtins
@@ -64,7 +65,6 @@ class Sandbox:
                 result_str = result.content[0].text
                 if result_str.startswith("FAIL"):
                     print(result_str)
-                    # raise RuntimeError(result_str)
                 return result_str
 
             return stub
@@ -223,7 +223,6 @@ class Sandbox:
                     "traceback": "Timeout after {elapsed_time} seconds, "
                     "execution stopped",
                 }
-
                 process.kill()
                 kill = True
                 break
@@ -238,7 +237,34 @@ class Sandbox:
         process.join()
         if not kill:
             output = q_result.get()
+        output = self.truncate_if_to_large(output)
         return output
+
+    def truncate_if_to_large(self, output: dict):
+        def truncate(field: str):
+            result = field
+            total_len = len(field)
+            if total_len > 6000:
+                to_truncate = total_len - 6000
+                result = field[:3000]
+                result += "{{ Tool output was truncated due to size limits }}"
+                result += field[3000 + to_truncate :]
+            return result
+
+        if output.get("stdout") and len(output["stdout"]) > 3000:
+            output["stdout"] = truncate(output["stdout"])
+        if output.get("stderr") and len(output["stderr"]) > 3000:
+            output["stderr"] = truncate(output["stderr"])
+        if output.get("traceback") and len(output["traceback"]) > 3000:
+            output["traceback"] = truncate(output["traceback"])
+        return output
+
+    def get_clean_tools(self):
+        result = str()
+        for tool in list(self.mcp_client.list_tools().tools):
+            result += f"\nname={tool.name}\n"
+            result += f"description={tool.description}\n\n"
+        return result
 
     def cli(
         self,
@@ -273,19 +299,29 @@ class Sandbox:
                 mcp_stdio = input(
                     "Command and Path to launch the MCP server script: "
                 )
+        try:
+            if mcp_stdio:
+                self._launch_server("stdio", mcp_stdio)
+            elif mcp_server:
+                self._launch_server("http", mcp_server)
+        except Exception:
+            raise ConnectionError(
+                "Unable to connect the MCP server with the provided "
+                "informations, please try again"
+            )
+
+        print(self.get_man())
+
         print("Write or paste the code to evaluate, then press Ctrl-D:")
         code_to_test = sys.stdin.read()
-        if mcp_stdio:
-            self._launch_server("stdio", mcp_stdio)
-        elif mcp_server:
-            self._launch_server("http", mcp_server)
-        self.run(code_to_test)
+        print(self.run(code_to_test))
 
     def get_man(self) -> str:
         """Render the sandbox manual with config and MCP metadata."""
         template = """\
 Isolated Python subprocess, fresh namespace each step (nothing persists).
-Only stdout is returned — print() what you need, or the value is lost.
+Only stdout and stderr are returned — print() what you need, or the value is
+lost.
 
 ## final_answer(answer)
 Always available (not an MCP tool); stops execution and submits. Never catch
@@ -334,10 +370,7 @@ They run outside the sandbox, so the limits below don't apply to them.
             "{{MAX_EXECUTION_TIME}}",
             str(self._config.max_execution_time_seconds),
         )
-        template = template.replace(
-            "{{TOOLS}}", str(self.mcp_client.list_tools().tools)
-        )
+        template = template.replace("{{TOOLS}}", self.get_clean_tools())
         template = template.replace("{{PROMPTS}}", str(prompts))
         template = template.replace("{{RESOURCES}}", str(resources))
-        print(template)
         return template
