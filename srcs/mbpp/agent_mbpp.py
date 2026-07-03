@@ -10,7 +10,6 @@ from srcs.llm import (
     CodeExtractor,
     Orchestrator,
 )
-from srcs.sandbox import mcp_client
 import json
 import os
 
@@ -87,14 +86,14 @@ def run_mbpp(
 ) -> SolutionOutput:
     """Run the MBPP agent on a single task and return its output."""
 
-    def validate_answer(code: str) -> str | None:
+    def validate_answer(code: str, sandbox: Sandbox) -> str | None:
         """Run the task's official visible tests against a submission.
 
         Enforces correctness in the harness instead of trusting the
         model's self-report: if the provided tests fail, the answer is
         rejected and the failure is fed back to the model.
         """
-        result = mcp_client.call_tool(
+        result = sandbox.mcp_client.call_tool(
             "run_tests",
             {
                 "code": code,

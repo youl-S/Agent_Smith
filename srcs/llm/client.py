@@ -1,9 +1,39 @@
+import re
 import time
 import openai
 from openai import OpenAI
 
-from srcs.llm.exceptions import AuthError, FatalError, RecoverableError
+from srcs.llm.exceptions import (
+    AuthError,
+    FatalError,
+    RateLimitError,
+    RecoverableError,
+)
 from srcs.llm.models import LLMResponse
+
+
+def _parse_retry_after(err: openai.RateLimitError) -> float | None:
+    """Extract the server-suggested wait, in seconds, from a 429.
+
+    Prefers the standard ``Retry-After`` header; falls back to parsing
+    the message body (e.g. "Please try again in 19.45s"). Returns None
+    if neither is present.
+    """
+    response = getattr(err, "response", None)
+    if response is not None:
+        headers = getattr(response, "headers", None) or {}
+        retry_after = headers.get("retry-after")
+        if retry_after:
+            try:
+                return float(retry_after)
+            except (TypeError, ValueError):
+                pass
+
+    match = re.search(r"try again in ([\d.]+)\s*s", str(err))
+    if match:
+        return float(match.group(1))
+
+    return None
 
 
 class LLMClient:
@@ -47,8 +77,13 @@ class LLMClient:
         except openai.AuthenticationError as e:
             raise AuthError(f"{type(e).__name__}: {e}") from e
 
+        except openai.RateLimitError as e:
+            raise RateLimitError(
+                f"{type(e).__name__}: {e}",
+                retry_after=_parse_retry_after(e),
+            ) from e
+
         except (
-            openai.RateLimitError,
             openai.APITimeoutError,
             openai.APIConnectionError,
         ) as e:

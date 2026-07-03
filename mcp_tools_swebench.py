@@ -2,8 +2,8 @@ from mcp.server.fastmcp import FastMCP
 import subprocess
 import sys
 import os
-import re
-import base64
+import shlex
+from typing import Any
 
 mcp = FastMCP("swebench-tools")
 execute_container = None
@@ -83,38 +83,47 @@ class DockerExec:
         cmd_exec: str,
         work_dir: str = TESTBED,
         timeout: int = 300,
-    ):
+        input_data: str | None = None,
+    ) -> dict[str, Any]:
         """Execute a command inside the managed Docker container.
 
         Args:
             cmd_exec: Command string to run inside the container.
             work_dir: Working directory inside the container.
-            timeout: Optional timeout in seconds for the command.
+            timeout: Timeout in seconds before the command is killed.
+            input_data: Optional stdin data to pipe into the command.
 
         Returns:
-            The completed subprocess result or a mock timeout object.
+            Dict with keys 'stdout', 'stderr', and 'exit_code'. On timeout,
+            'exit_code' is -1 and 'stderr' is 'Command timed out'.
         """
         self.start_container()
 
         assert self.id_container is not None and self.id_container
 
-        exec_bash = [
-            "docker",
-            "exec",
-            "-w",
-            work_dir,
-            self.id_container,
-            "bash",
-            "-c",
-            cmd_exec,
-        ]
-        container_exec = subprocess.run(
-            exec_bash,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        return container_exec
+        exec_bash = ["docker", "exec", "-w", work_dir]
+        if input_data is not None:
+            exec_bash.append("-i")
+        exec_bash += [self.id_container, "bash", "-c", cmd_exec]
+        try:
+            container_exec = subprocess.run(
+                exec_bash,
+                input=input_data,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            return {
+                "stdout": container_exec.stdout,
+                "stderr": container_exec.stderr,
+                "exit_code": container_exec.returncode,
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "stdout": "",
+                "stderr": "Command timed out",
+                "exit_code": -1,
+            }
 
     def clean_container(self) -> None:
         """Remove the managed Docker container if one exists.
@@ -140,323 +149,265 @@ def container_sandbox() -> DockerExec | str:
 
 
 @mcp.tool()
-def read_file(filepath: str, start_line: int = 1, end_line: int = -1):
-    """Read a file from the sandbox container and return requested lines.
+def read_file(
+    filepath: str,
+    start_line: int | None = 1,
+    end_line: int | None = -1,
+) -> str:
+    """Read the content of a file with line numbers.
 
     Args:
-        filepath: Path to the file inside the sandbox container.
-        start_line: First line number to include, 1-based.
-        end_line: Last line number to include, or -1 for all lines.
+        filepath: The absolute or relative path to the file.
+        start_line: The line number to start reading from (1-indexed).
+        end_line: The line number to stop reading at (-1 = end).
 
     Returns:
-        Numbered file contents (like `cat -n`) or a FAIL message.
+        File content formatted as '<line_number>: <line_content>'.
     """
     get_container = container_sandbox()
     if isinstance(get_container, str):
         return get_container
 
-    try:
-        res = get_container.exec(f"cat {filepath}")
-    except subprocess.TimeoutExpired:
-        return f"FAIL reading {filepath}: timed out"
-    except Exception as e:
-        return f"FAIL reading {filepath}: {type(e).__name__}: {e}"
+    out = get_container.exec(f"cat {shlex.quote(filepath)}")
+    if out["exit_code"] != 0:
+        return f"Error: {out['stderr'].strip()}"
+    lines = out["stdout"].splitlines()
+    total = len(lines)
+    start = 1 if start_line is None else start_line
+    end = -1 if end_line is None else end_line
+    start_idx = max(0, start - 1)
+    end_idx = total if end == -1 else min(end, total)
+    chunk = [f"{i + 1}: {lines[i]}" for i in range(start_idx, end_idx)]
+    return "\n".join(chunk) if chunk else "Error: No lines in range."
 
-    if res.returncode != 0:
-        return f"FAIL {res.stderr.strip()}"
 
-    all_lines = res.stdout.splitlines()
-    total = len(all_lines)
+@mcp.tool()
+def edit_file(filepath: str, old_str: str, new_str: str) -> str:
+    """Replace an exact string in a file with a new string.
 
-    start_idx = max(0, start_line - 1)
-    end_idx = total if end_line == -1 else min(end_line, total)
+    Args:
+        filepath: The path to the file to edit.
+        old_str: The exact string to find and replace.
+        new_str: The replacement string.
 
-    selected = all_lines[start_idx:end_idx]
-    if not selected:
-        return f"FAIL no lines in range {start_line}-{end_line} ({filepath})"
+    Returns:
+        A success message or an error if the string was not found.
+    """
+    get_container = container_sandbox()
+    if isinstance(get_container, str):
+        return get_container
 
-    return "\n".join(
-        f"{n}: {line}" for n, line in enumerate(selected, start=start_line)
+    read = get_container.exec(f"cat {shlex.quote(filepath)}")
+    if read["exit_code"] != 0:
+        raise FileNotFoundError(
+            f"edit_file made NO changes: file '{filepath}' not found."
+        )
+    content = read["stdout"]
+    if old_str not in content:
+        lines = content.splitlines()
+        anchor = max(
+            (ln.strip() for ln in old_str.splitlines()),
+            key=len,
+            default="",
+        )[:40]
+        hints: list[str] = []
+        if anchor:
+            for i, line in enumerate(lines, 1):
+                if anchor in line:
+                    window = lines[i - 1: i + 1]
+                    hints.extend(
+                        f"{i + off}: {w}" for off, w in enumerate(window)
+                    )
+        hint_text = "\n".join(hints[:12]) or "(no similar lines found)"
+        raise ValueError(
+            "edit_file made NO changes: 'old_str' was not found "
+            "exactly. It must match the file byte-for-byte, including "
+            "leading indentation and newlines (the target often spans "
+            "several lines). Closest lines in the file:\n"
+            f"{hint_text}\n"
+            "Re-read these exact lines and copy them verbatim as "
+            "old_str."
+        )
+    occurrences = content.count(old_str)
+    new_content = content.replace(old_str, new_str)
+    write = get_container.exec(
+        f"cat > {shlex.quote(filepath)}", input_data=new_content
+    )
+    if write["exit_code"] != 0:
+        raise IOError(f"edit_file failed to write: {write['stderr'].strip()}")
+
+    return f"Success: Replaced {occurrences} occurrence(s)."
+
+
+@mcp.tool()
+def list_files(directory: str, pattern: str = "*") -> str:
+    """List files in a directory matching a given pattern.
+
+    Args:
+        directory: The directory path to search in.
+        pattern: Glob pattern to match (e.g., '*.py', '*test*').
+
+    Returns:
+        A list of matching file paths, one per line.
+    """
+    get_container = container_sandbox()
+    if isinstance(get_container, str):
+        return get_container
+
+    out = get_container.exec(
+        f"find {shlex.quote(directory)} -type f "
+        f"-name {shlex.quote(pattern)}"
+    )
+    if out["exit_code"] != 0:
+        return f"Error: {out['stderr'].strip()}"
+    return out["stdout"].strip() or f"No files matching '{pattern}'."
+
+
+@mcp.tool()
+def search_code(pattern: str, file_pattern: str = "*.py") -> str:
+    """Search for a regex pattern across the testbed.
+
+    Args:
+        pattern: Regular expression to search for.
+        file_pattern: Glob pattern to filter files (e.g., '*.py').
+
+    Returns:
+        Matching lines formatted as '/path:line content', capped
+        at 100 results.
+    """
+    get_container = container_sandbox()
+    if isinstance(get_container, str):
+        return get_container
+
+    out = get_container.exec(
+        f"grep -rEn --include={shlex.quote(file_pattern)} "
+        f"-e {shlex.quote(pattern)} {TESTBED}"
+    )
+    if out["exit_code"] not in (0, 1):
+        return f"Error: {out['stderr'].strip()}"
+    lines = out["stdout"].splitlines()
+    if not lines:
+        return f"No matches found for '{pattern}'."
+    formatted = []
+    for ln in lines[:100]:
+        parts = ln.split(":", 2)
+        formatted.append(
+            f"{parts[0]}:{parts[1]} {parts[2]}" if len(parts) == 3 else ln
+        )
+    if len(lines) > 100:
+        formatted.append(
+            f"...and {len(lines) - 100} more. Refine your search."
+        )
+    return "\n".join(formatted)
+
+
+@mcp.tool()
+def search_function_or_class_definition_in_code(name: str) -> str:
+    """Find a function or class definition by name.
+
+    Args:
+        name: The function or class name to search for.
+
+    Returns:
+        Matching definition lines from the testbed.
+    """
+    return search_code(f"(def|class) {name}")
+
+
+@mcp.tool()
+def find_references(
+    name: str,
+    filepath: str | None = None,
+    line: int | None = None,
+) -> str:
+    """Find all usages of a symbol (function or class) in the testbed.
+
+    The symbol is matched as a whole word (``\\bname\\b``) so that
+    ``foo`` does not also match ``foobar``. The optional ``filepath``
+    and ``line`` arguments narrow the search to disambiguate a symbol:
+    ``filepath`` restricts results to a single file, and ``line``
+    filters them to that exact line (useful to pinpoint one definition
+    among several identically-named symbols).
+
+    Args:
+        name: Symbol name to search for.
+        filepath: Optional file to restrict the search to.
+        line: Optional line number to keep only matches on that line.
+
+    Returns:
+        Matching lines in search_code format ('/path:line content'),
+        or a message if nothing matched.
+    """
+    results = search_code(rf"\b{name}\b")
+    if filepath is None and line is None:
+        return results
+    if results.startswith(("No matches", "Error:")):
+        return results
+    target = os.path.basename(filepath) if filepath else None
+    kept = []
+    for ln in results.splitlines():
+        loc = ln.split(" ", 1)[0]  # '/path:line'
+        path, _, lineno = loc.rpartition(":")
+        if target is not None and os.path.basename(path) != target:
+            continue
+        if line is not None and lineno != str(line):
+            continue
+        kept.append(ln)
+    return "\n".join(kept) if kept else f"No references to '{name}' found."
+
+
+@mcp.tool()
+def run_command(command: str, workdir: str = TESTBED) -> str:
+    """Run an arbitrary bash command in the Docker container.
+
+    Args:
+        command: Command to execute.
+        workdir: Working directory inside the container.
+
+    Returns:
+        Formatted string with stdout, stderr, and exit code.
+    """
+    get_container = container_sandbox()
+    if isinstance(get_container, str):
+        return get_container
+
+    out = get_container.exec(command, workdir)
+    return (
+        f"STDOUT:\n{out['stdout']}\n\nSTDERR:\n{out['stderr']}"
+        f"\n\nEXIT_CODE:\n{out['exit_code']}"
     )
 
 
 @mcp.tool()
-def edit_file(filepath: str, old_str: str, new_str: str):
-    """Replace the first occurrence of a string in a file inside the sandbox.
-
-    Args:
-        filepath: Path to the file inside the sandbox container.
-        old_str: Text to replace.
-        new_str: Replacement text.
+def get_patch() -> str:
+    """Return the current git diff from the testbed.
 
     Returns:
-        "PASS" on success, or an error string if the operation fails.
+        Unified diff string of all uncommitted changes.
     """
     get_container = container_sandbox()
-
     if isinstance(get_container, str):
         return get_container
 
-    try:
-        res = get_container.exec(f"cat {filepath}")
-        if res.returncode != 0:
-            return f"FAIL {res.stderr.strip()}"
-
-    except Exception as e:
-        return f"FAIL reading {filepath}: {type(e).__name__}: {e}"
-
-    content = res.stdout
-
-    if old_str not in content:
-        return f"FAIL {old_str} not found in {filepath}"
-    content = content.replace(old_str, new_str, 1)
-
-    encoded = base64.b64encode(content.encode()).decode()
-    try:
-        res = get_container.exec(f"echo '{encoded}' | base64 -d > {filepath}")
-        if res.returncode != 0:
-            return f"FAIL writing {filepath}: {res.stderr.strip()}"
-
-    except Exception as e:
-        return f"FAIL writing {filepath}: {type(e).__name__}: {e}"
-
-    return "PASS"
+    out = get_container.exec("git -c core.fileMode=false diff")
+    return str(out["stdout"])
 
 
 @mcp.tool()
-def list_files(directory: str, pattern: str = "*"):
-    """List files under a directory matching a glob pattern.
-
-    Args:
-        directory: Directory to search.
-        pattern: Filename glob pattern to match.
+def run_tests() -> str:
+    """Run the evaluation script inside the Docker container.
 
     Returns:
-        A string with matching file paths separated by newlines, or an error.
-    """
-    get_container = container_sandbox()
-
-    if isinstance(get_container, str):
-        return get_container
-
-    try:
-        res = get_container.exec(
-            f"find '{directory}' -type f -name '{pattern}'"
-        )
-        if res.returncode != 0:
-            return f"FAIL {res.stderr.strip()}"
-    except Exception as e:
-        return f"FAIL listing {directory}: {type(e).__name__}: {e}"
-
-    result = res.stdout
-
-    if not result.strip():
-        return f"FAIL in {directory}: no files with the pattern {pattern}"
-    return result
-
-
-@mcp.tool()
-def search_code(pattern: str, file_pattern: str = "*"):
-    """Search files in the testbed for a pattern.
-
-    Args:
-        pattern: The search string or regex to pass to grep.
-        file_pattern: Glob pattern to limit which files are searched.
-
-    Returns:
-        Matching lines with file paths and line numbers, or an error message.
-    """
-    get_container = container_sandbox()
-
-    if isinstance(get_container, str):
-        return get_container
-
-    try:
-        res = get_container.exec(
-            f"grep -rn --include='{file_pattern}' -- '{pattern}' {TESTBED}"
-        )
-
-        if res.returncode == 1:
-            ERROR_MSG = f"FAIL no matches found for pattern '{pattern}'"
-            ERROR_MSG += f"(file_pattern='{file_pattern}') in {TESTBED}"
-            return ERROR_MSG
-
-        if res.returncode != 0:
-            return f"FAIL {res.stderr.strip()}"
-    except Exception as e:
-        return f"FAIL searching '{pattern}': {type(e).__name__}: {e}"
-
-    search_code = res.stdout.strip()
-    return search_code
-
-
-@mcp.tool()
-def search_function_or_class_definition_in_code(name: str):
-    """Search Python files for a function or class definition by name.
-
-    Returns the first matching line with file path and line number.
-    """
-    get_container = container_sandbox()
-
-    if isinstance(get_container, str):
-        return get_container
-
-    escaped_name = re.escape(name)
-    grep_pattern = rf"^[[:space:]]*(def|class)[[:space:]]+{escaped_name}\b"
-
-    try:
-        res = get_container.exec(
-            f"grep -rnE --include='*.py' -- '{grep_pattern}' {TESTBED}"
-        )
-
-        if res.returncode == 1:
-            return f"FAIL no functions or class name {name}"
-
-        if res.returncode != 0:
-            return f"FAIL {res.stderr.strip()}"
-    except Exception as e:
-        return f"FAIL searching definition '{name}': {type(e).__name__}: {e}"
-
-    lines = res.stdout.strip().splitlines()
-    if not lines:
-        return f"FAIL no definition found for {name}"
-
-    first_match = lines[0]
-    return first_match
-
-
-@mcp.tool()
-def find_references(name: str, filepath: str, line: str):
-    """Find all usages of a symbol (function or class).
-
-    Args:
-        name: The symbol name to find references for.
-        filepath: Path of the file where the symbol appears.
-        line: Line number where the symbol appears (as a string).
-
-    Returns:
-        Matching lines with file paths and line numbers (same format as
-        search_code), or a FAIL message if none are found.
+        Formatted string with stdout, stderr, and exit code.
     """
     get_container = container_sandbox()
     if isinstance(get_container, str):
         return get_container
 
-    escaped_name = re.escape(name)
-    grep_pattern = rf"\b{escaped_name}\b"
-
-    try:
-        res = get_container.exec(
-            f"grep -rnE --include='*.py' -- '{grep_pattern}' {TESTBED}"
-        )
-
-        if res.returncode == 1:
-            return f"FAIL no references found for {name}"
-
-        if res.returncode != 0:
-            return f"FAIL {res.stderr.strip()}"
-    except Exception as e:
-        return f"FAIL finding references '{name}': {type(e).__name__}: {e}"
-
-    references = res.stdout.strip()
-
-    MAX_CHARS = 10000
-    if len(references) > MAX_CHARS:
-        references = references[:MAX_CHARS] + "\n[truncated]"
-    return references
-
-
-@mcp.tool()
-def run_tests():
-    """Run the evaluation test suite and return its raw output.
-
-    No arguments. Read the output to see which tests pass or fail, then
-    keep editing until they pass. A non-zero exit code is normal when tests
-    fail; output is returned either way. Long output is truncated.
-    """
-    get_container = container_sandbox()
-    if isinstance(get_container, str):
-        return get_container
-
-    try:
-        _, eval_script = load_config()
-    except ValueError as e:
-        return f"FAIL loading config: {e}"
-
-    try:
-        res = get_container.exec(f"bash {eval_script}", timeout=900)
-    except subprocess.TimeoutExpired:
-        return "FAIL tests timed out after 900s"
-    except Exception as e:
-        return f"FAIL could not run tests: {type(e).__name__}: {e}"
-    output = []
-    if res.stdout:
-        output.append(res.stdout.strip())
-    if res.stderr:
-        output.append(res.stderr.strip())
-    run_output = "\n.\n".join(output) if output else "(no test output)"
-
-    MAX_CHARS = 15000
-    if len(run_output) > MAX_CHARS:
-        run_output = "[output truncated]\n" + run_output[-MAX_CHARS:]
-    return run_output
-
-
-@mcp.tool()
-def get_patch():
-    """
-    Get the current git diff patch from inside the sandbox container.
-
-    Returns:
-        The patch text if modifications exist.
-        A message indicating no modifications if the repository is clean.
-        An error string if sandbox initialization or git diff fails.
-    """
-    get_container = container_sandbox()
-
-    if isinstance(get_container, str):
-        return get_container
-
-    try:
-        res = get_container.exec("git -c core.fileMode=false diff")
-        if res.returncode != 0:
-            return f"FAIL {res.stderr.strip()}"
-    except Exception as e:
-        return f"FAIL getting patch: {type(e).__name__}: {e}"
-
-    patch = res.stdout.strip()
-    if not patch:
-        return "FAIL No modifications in the git repository."
-    return patch
-
-
-@mcp.tool()
-def run_command(command: str, workdir: str = TESTBED):
-    """Execute a shell command inside the sandbox container.
-
-    Args:
-        command: Command string to execute.
-        workdir: Working directory path inside the sandbox container.
-
-    Returns:
-        A text report with stdout, stderr and the exit code, or a FAIL
-        string if the command could not be run.
-    """
-    get_container = container_sandbox()
-    if isinstance(get_container, str):
-        return get_container
-
-    try:
-        res = get_container.exec(command, workdir)
-    except subprocess.TimeoutExpired:
-        return "FAIL command timed out"
-    except Exception as e:
-        return f"FAIL running command: {type(e).__name__}: {e}"
-
+    out = get_container.exec(get_container.eval_script, timeout=900)
     return (
-        f"exit_code: {res.returncode}\n"
-        f"stdout:\n{res.stdout.strip()}\n"
-        f"stderr:\n{res.stderr.strip()}"
+        f"STDOUT:\n{out['stdout']}\n\nSTDERR:\n{out['stderr']}"
+        f"\n\nEXIT_CODE:\n{out['exit_code']}"
     )
 
 

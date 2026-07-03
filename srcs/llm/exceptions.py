@@ -18,6 +18,19 @@ class AuthError(RecoverableError):
     """
 
 
+class RateLimitError(RecoverableError):
+    """
+    Rate limited (429). Recoverable. Carries the server-suggested wait
+    time in seconds (from the Retry-After header or the message body)
+    when the provider reports one, so the caller can wait exactly that
+    long instead of guessing with backoff.
+    """
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class FatalError(LLMError):
     """
     Non-recoverable: switching target won't help (e.g. 400 bad request).

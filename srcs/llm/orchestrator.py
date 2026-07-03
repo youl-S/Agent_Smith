@@ -100,102 +100,122 @@ class Orchestrator:
         total_input: int = 0
         total_output: int = 0
 
-        for i in range(1, self._max_iter + 1):
-            elapsed = time.perf_counter() - start
-            if elapsed >= self._max_time * self._margin:
-                error = f"time limit ({self._max_time}s) reached"
-                break
-            if steps:
-                if (
-                    round(
-                        total_input
-                        + (steps[-1].input_tokens * input_prediction_factor)
-                    )
-                    >= self._max_input
-                ):
-                    error = f"input token limit ({self._max_input}) reached"
+        try:
+            for i in range(1, self._max_iter + 1):
+                elapsed = time.perf_counter() - start
+                if elapsed >= self._max_time * self._margin:
+                    error = f"time limit ({self._max_time}s) reached"
                     break
-            if steps:
-                if (
-                    round(
-                        total_output
-                        + (steps[-1].output_tokens * input_prediction_factor)
-                    )
-                    >= self._max_output
-                ):
-                    error = f"output token limit ({self._max_output}) reached"
-                    break
-
-            llm = self._manager.generate(
-                messages, stop_sequences=self._stop, max_tokens=max_tokens
-            )
-            if not llm.success:
-                error = f"LLM failed: {llm.error}"
-                break
-
-            total_input += llm.input_tokens
-            total_output += llm.output_tokens
-
-            block = self._extractor.extract(llm.text)
-            code: str | None = block.code_extracted
-
-            observation: str
-            sandbox_input: str
-            if not code:
-                observation = (
-                    "No code block found. Respond with exactly one "
-                    "```python ... ``` block ending with <end_code>."
-                )
-                sandbox_input = ""
-            else:
-                sandbox_input = code
-                result = self._sandbox.run(code)
-
-                if result["type"] == "final_answer":
-                    solution = result["answer"]
-                    if validate_answer is not None:
-                        last_test = validate_answer(solution)
-                        if last_test:
-                            observation = last_test
-                            success = False
-                    else:
-                        observation = (
-                            result.get("stdout", "") or "final_answer received"
+                if steps:
+                    if (
+                        round(
+                            total_input
+                            + (
+                                steps[-1].input_tokens
+                                * input_prediction_factor
+                            )
                         )
-                        success = True
-                else:
-                    parts = [
-                        result.get("stdout", ""),
-                        result.get("traceback", ""),
-                    ]
-                    observation = (
-                        "\n".join(p for p in parts if p).strip() or ""
-                    )
+                        >= self._max_input
+                    ):
+                        error = (
+                            f"input token limit ({self._max_input}) reached"
+                        )
+                        break
+                if steps:
+                    if (
+                        round(
+                            total_output
+                            + (
+                                steps[-1].output_tokens
+                                * input_prediction_factor
+                            )
+                        )
+                        >= self._max_output
+                    ):
+                        error = (
+                            f"output token limit ({self._max_output}) reached"
+                        )
+                        break
 
-            steps.append(
-                StepMetrics(
-                    step=i,
-                    input_tokens=llm.input_tokens,
-                    output_tokens=llm.output_tokens,
-                    request_time_ms=llm.request_time_ms,
-                    api_url=llm.api_url,
-                    model_name=llm.model_name,
-                    llm_output=llm.text,
-                    sandbox_input=sandbox_input,
-                    sandbox_output=observation,
-                    retries=llm.retries,
+                llm = self._manager.generate(
+                    messages, stop_sequences=self._stop, max_tokens=max_tokens
                 )
-            )
+                if not llm.success:
+                    error = f"LLM failed: {llm.error}"
+                    break
 
-            if success:
-                break
+                total_input += llm.input_tokens
+                total_output += llm.output_tokens
 
-            messages.append({"role": "assistant", "content": llm.text})
-            messages.append(
-                {"role": "user", "content": f"Observation:\n{observation}"}
-            )
+                block = self._extractor.extract(llm.text)
+                code: str | None = block.code_extracted
+
+                observation: str
+                sandbox_input: str
+                if not code:
+                    observation = (
+                        "No code block found. Respond with exactly one "
+                        "```python ... ``` block ending with <end_code>."
+                    )
+                    sandbox_input = ""
+                else:
+                    sandbox_input = code
+                    result = self._sandbox.run(code)
+
+                    if result["type"] == "final_answer":
+                        solution = result["answer"]
+                        if validate_answer is not None:
+                            print("ok")
+                            last_test = validate_answer(
+                                solution, self._sandbox
+                            )
+                            if last_test:
+                                observation = last_test
+                                success = False
+                            else:
+                                observation = (
+                                    result.get("stdout", "")
+                                    or "final_answer received"
+                                )
+                                success = True
+                    else:
+                        parts = [
+                            result.get("stdout", ""),
+                            result.get("traceback", ""),
+                        ]
+                        observation = (
+                            "\n".join(p for p in parts if p).strip() or ""
+                        )
+
+                steps.append(
+                    StepMetrics(
+                        step=i,
+                        input_tokens=llm.input_tokens,
+                        output_tokens=llm.output_tokens,
+                        request_time_ms=llm.request_time_ms,
+                        api_url=llm.api_url,
+                        model_name=llm.model_name,
+                        llm_output=llm.text,
+                        sandbox_input=sandbox_input,
+                        sandbox_output=observation,
+                        retries=llm.retries,
+                    )
+                )
+
+                if success:
+                    break
+
+                messages.append({"role": "assistant", "content": llm.text})
+                messages.append(
+                    {"role": "user", "content": f"Observation:\n{observation}"}
+                )
+
+        except Exception as e:
+            error = f"orchestrator crashed: {type(e).__name__}: {e}"
+            success = False
 
         total_time: float = time.perf_counter() - start
+
         return SolutionOutput(
             task_id=task_id,
             benchmark=benchmark,

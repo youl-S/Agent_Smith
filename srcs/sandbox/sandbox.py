@@ -1,7 +1,6 @@
 from srcs.models import SandboxConfig
 from srcs.sandbox.mcp_client import McpClient
 from pathlib import Path
-from mcp import Tool
 from typing import Any, Callable
 import multiprocessing
 import builtins
@@ -63,8 +62,8 @@ class Sandbox:
                 q_call.put({"tool": tool_name, "args": kwargs})
                 result = q_answer.get()
                 result_str = result.content[0].text
-                if result_str.startswith("FAIL"):
-                    print(result_str)
+                # if result_str.startswith("FAIL"):
+                print(result_str)
                 return result_str
 
             return stub
@@ -314,8 +313,6 @@ class Sandbox:
                 "informations, please try again"
             )
 
-        print(self.get_man())
-
         print("Write or paste the code to evaluate, then press Ctrl-D:")
         code_to_test = sys.stdin.read()
         print(self.run(code_to_test))
@@ -323,13 +320,13 @@ class Sandbox:
     def get_man(self) -> str:
         """Render the sandbox manual with config and MCP metadata."""
         template = """\
-Isolated Python subprocess, fresh namespace each step (nothing persists).
 Only stdout and stderr are returned — print() what you need, or the value is
 lost.
 
 ## final_answer(answer)
 Always available (not an MCP tool); stops execution and submits. Never catch
 it with a bare `except`.
+No keyword argument here.
 - MBPP: final_answer(solution_code_str)
 - SWE-bench: final_answer(get_patch())
 

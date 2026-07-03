@@ -9,7 +9,6 @@ from srcs.llm import (
     LLMManager,
     LLMClient,
 )
-from srcs.sandbox import mcp_client
 from pathlib import Path
 import subprocess
 import json
@@ -111,43 +110,44 @@ def _cleanup(sandbox: Sandbox, docker_image: str) -> None:
         pass
 
 
-def validate_answer(patch: str) -> str | None:
-    """Run the real evaluation script against the submitted patch.
-
-    The task input does not expose the FAIL_TO_PASS/PASS_TO_PASS
-    test list, so correctness is judged by requiring BOTH a clean
-    exit code AND the absence of failure markers in the report
-    (some eval scripts, e.g. sympy's bin/test, return exit code 0
-    even when tests fail). This rejects a final_answer whose patch
-    does not actually make the tests pass.
-    """
-    result = mcp_client.call_tool("run_tests", {})
-    exit_match = re.search(r"EXIT_CODE:\s*(-?\d+)", result)
-    exit_ok = exit_match.group(1) == "0" if exit_match else True
-    failure_markers = re.search(
-        r"[FAIL]"
-        r"|FAILED ("
-        r"|\d+ failed"
-        r"|=+ FAILURES =+"
-        r"|Traceback (most recent",
-        result,
-    )
-    if exit_ok and not failure_markers:
-        return None
-    tail = result if len(result) <= 4000 else result[-4000:]
-    return (
-        "final_answer rejected: the evaluation tests did not pass.\n"
-        f"{tail}\n"
-        "Inspect the failures, fix the code with edit_file, verify "
-        "with run_tests(), then call final_answer(get_patch()) again."
-    )
-
-
 def run_swebench(
     task: SWEBenchTaskInput,
     model_name: str,
     provider_url: str,
 ) -> SolutionOutput:
+
+    def validate_answer(patch: str, sandbox: Sandbox) -> str | None:
+        """Run the real evaluation script against the submitted patch.
+
+        The task input does not expose the FAIL_TO_PASS/PASS_TO_PASS
+        test list, so correctness is judged by requiring BOTH a clean
+        exit code AND the absence of failure markers in the report
+        (some eval scripts, e.g. sympy's bin/test, return exit code 0
+        even when tests fail). This rejects a final_answer whose patch
+        does not actually make the tests pass.
+        """
+        result = sandbox.mcp_client.call_tool("run_tests", {}).content[0].text
+        print("cest ici ", result)
+        exit_match = re.search(r"EXIT_CODE:\s*(-?\d+)", result)
+        exit_ok = exit_match.group(1) == "0" if exit_match else True
+        failure_markers = re.search(
+            r"\bFAIL"
+            r"|FAILED \("
+            r"|\d+ failed"
+            r"|=+ FAILURES =+"
+            r"|Traceback \(most recent",
+            result,
+        )
+        if exit_ok and not failure_markers:
+            return None
+        tail = result if len(result) <= 4000 else result[-4000:]
+        return (
+            "final_answer rejected: the evaluation tests did not pass.\n"
+            f"{tail}\n"
+            "Inspect the failures, fix the code with edit_file, verify "
+            "with run_tests(), then call final_answer(get_patch()) again."
+        )
+
     os.environ["SWE_DOCKER_IMG"] = task.docker_image
     os.environ["SWE_EVAL_SCRIPT"] = task.eval_script
 
@@ -177,7 +177,7 @@ def run_swebench(
             task_id=str(task.instance_id),
             benchmark="swebench",
             task_message=build_task_message(task),
-            max_tokens=10000,
+            max_tokens=2000,
             validate_answer=validate_answer,
         )
     finally:
