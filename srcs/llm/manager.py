@@ -7,6 +7,14 @@ from srcs.llm.models import ProviderTarget, LLMResponse
 
 
 class LLMManager:
+    """Drive LLM calls across multiple targets and API keys.
+
+    Cascades over the configured provider targets and their API keys: on an
+    auth error (401) the key is banned for the session; on a transient error
+    (429/timeout/5xx) it backs off and tries the next key; on a fatal error
+    it stops. Returns a successful LLMResponse or a failure one.
+    """
+
     def __init__(
         self,
         targets: list[ProviderTarget],
@@ -14,6 +22,14 @@ class LLMManager:
         base_backoff_s: float = 1.0,
         max_backoff_s: float = 8.0,
     ):
+        """Initialize the manager.
+
+        Args:
+            targets: Provider targets to try in order, each with its keys.
+            client: The client used to perform a single completion.
+            base_backoff_s: Base delay for exponential backoff, in seconds.
+            max_backoff_s: Maximum backoff delay, in seconds.
+        """
         self._targets = targets
         self._client = client
         self._invalid_api_keys = set()
@@ -21,6 +37,12 @@ class LLMManager:
         self._max_backoff_s = max_backoff_s
 
     def _backoff(self, attempt: int) -> None:
+        """Sleep with exponential backoff, capped at max_backoff_s.
+
+        The delay is base_backoff_s * 2**attempt, bounded by max_backoff_s,
+        so repeated failures wait longer without growing unbounded.
+        """
+
         delay = min(
             self._base_backoff_s * (2**attempt),
             self._max_backoff_s,
@@ -30,6 +52,22 @@ class LLMManager:
     def generate(
         self, messages, stop_sequences=None, max_tokens: int | None = None
     ) -> LLMResponse:
+        """Generate a completion, cascading over targets and keys.
+
+        Skips already-banned keys, then for each key calls the client. On
+        AuthError the key is banned (no wait); on RecoverableError it backs
+        off and moves on; on FatalError it returns a failure immediately.
+        The number of retries is recorded on the returned response.
+
+        Args:
+            messages: The chat messages to send.
+            stop_sequences: Optional stop sequences for generation.
+            max_tokens: Optional cap on output tokens for this call.
+
+        Returns:
+            A successful LLMResponse, or a failure LLMResponse if every
+            target and key is exhausted.
+        """
         retries = 0
         last_error = "no targets configured"
 
