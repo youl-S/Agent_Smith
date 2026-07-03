@@ -13,21 +13,8 @@ from srcs.llm import (
 import json
 import os
 
-SANDBOX_MANUAL = (
-    "- read_file(filepath, start_line=1, end_line=-1): Read the content of a file with line numbers.\n"
-    "- edit_file(filepath, old_str, new_str): Replace an exact string in a file with a new string.\n"
-    "- list_files(directory, pattern='*'): List files in a directory matching a given pattern.\n"
-    "- search_code(pattern, file_pattern='*.py'): Perform a grep-like search in the codebase.\n"
-    "- search_function_or_class_definition_in_code(name): Find the definition of a function or a class.\n"
-    "- find_references(name, filepath=None, line=None): Find all usages of a symbol.\n"
-    "- run_tests(): Execute the evaluation script.\n"
-    "- get_patch(): Retrieve the unified git diff of all changes made to the repository.\n"
-    "- run_command(command, workdir='/testbed'): Execute a shell command in the specified working directory.\n"
-    "- final_answer(answer_string): Submit the task once you verify your patch works."
-)
 
-
-def build_system_prompt(man_sandbox: str = SANDBOX_MANUAL) -> str:
+def build_system_prompt(man_sandbox: str) -> str:
     return f"""You are an expert software engineer resolving enterprise
     codebase bugs through a Thought -> Code -> Observation loop.
 
@@ -64,6 +51,11 @@ run_tests(cmd="grep -rn 'def calculate_total' src/")"""
 
 
 def build_task_message(task: SWEBenchTaskInput) -> str:
+    # test_list_lit = json.dumps(task.test_list)
+    # test_imports_lit = json.dumps(task.test_imports)
+    # return (
+
+    # )
     pass
 
 
@@ -102,7 +94,7 @@ def run_swebench(
         manager=manager,
         extractor=CodeExtractor,
         sandbox=sandbox,
-        system_prompt=build_system_prompt(SANDBOX_MANUAL),
+        system_prompt=build_system_prompt(sandbox.get_man()),
         stop_sequences=["<end_code>"],
         max_iterations=30,
         max_input_tokens=300000,
