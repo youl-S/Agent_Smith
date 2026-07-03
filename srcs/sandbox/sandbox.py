@@ -1,6 +1,7 @@
 from srcs.models import SandboxConfig
 from srcs.sandbox.mcp_client import McpClient
 from pathlib import Path
+from mcp import Tool
 from typing import Any, Callable
 import multiprocessing
 import builtins
@@ -258,6 +259,13 @@ class Sandbox:
             output["traceback"] = truncate(output["traceback"])
         return output
 
+    def get_clean_tools(self):
+        result = str()
+        for tool in list(self.mcp_client.list_tools().tools):
+            result += f"\nname={tool.name}\n"
+            result += f"description={tool.description}\n\n"
+        return result
+
     def cli(
         self,
         config_file: str | None = None,
@@ -301,6 +309,8 @@ class Sandbox:
                 "Unable to connect the MCP server with the provided "
                 "informations, please try again"
             )
+
+        print(self.get_man())
 
         print("Write or paste the code to evaluate, then press Ctrl-D:")
         code_to_test = sys.stdin.read()
@@ -360,10 +370,7 @@ They run outside the sandbox, so the limits below don't apply to them.
             "{{MAX_EXECUTION_TIME}}",
             str(self._config.max_execution_time_seconds),
         )
-        template = template.replace(
-            "{{TOOLS}}", str(self.mcp_client.list_tools().tools)
-        )
+        template = template.replace("{{TOOLS}}", self.get_clean_tools())
         template = template.replace("{{PROMPTS}}", str(prompts))
         template = template.replace("{{RESOURCES}}", str(resources))
-        print(template)
         return template
