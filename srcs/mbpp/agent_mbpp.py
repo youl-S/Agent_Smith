@@ -148,7 +148,6 @@ def run_mbpp_cli(
         path = Path(output)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(result.model_dump_json(indent=4))
-    print(result.model_dump_json(indent=4))
 
 
 def main() -> None:

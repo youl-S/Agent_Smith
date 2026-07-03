@@ -1,6 +1,5 @@
 from srcs.models import SWEBenchTaskInput, SolutionOutput
 from srcs.sandbox.sandbox import Sandbox
-from json import JSONDecodeError
 from dotenv import load_dotenv
 from fire import Fire
 from srcs.llm import (
@@ -10,53 +9,72 @@ from srcs.llm import (
     LLMManager,
     LLMClient,
 )
+from pathlib import Path
+import subprocess
 import json
 import os
 
 
 def build_system_prompt(man_sandbox: str) -> str:
-    return f"""You are an expert software engineer resolving enterprise
-    codebase bugs through a Thought -> Code -> Observation loop.
+    return f"""You are an expert software engineer resolving codebase bugs \
+through a Thought -> Code -> Observation loop.
 
 # Response format
 Each turn: write a brief Thought, then exactly ONE Python code block with
-exactly ONE tool call ending with <end_code>.
+exactly ONE tool call, ending with <end_code>:
 
-You MUST call every tool with KEYWORD arguments only (name=value).
-Never use positional arguments.
-- Correct:   execute_bash(cmd="pytest")
-- Incorrect: execute_bash("pytest")
+```python
+# one tool call here
+```
+<end_code>
 
-The code runs in an isolated sandbox containing the codebase repository
-(mounted at /testbed).
+You MUST call every tool with KEYWORD arguments only (name=value), never
+positional.
+- Correct:   read_file(filepath="/testbed/x.py")
+- Incorrect: read_file("/testbed/x.py")
+
+The code runs in an isolated sandbox containing the repository at /testbed.
 You then receive an Observation and continue.
 
 # Sandbox manual
-The following tools are available as Python functions inside your sandbox:
+The following tools are available as Python functions inside the sandbox:
 
 {man_sandbox}
 
-# How to solve SWE-bench issues
-1. Use `execute_bash` or `read_file` to inspect files and reproduce the issue 
-described.
-2. Edit files or apply a git patch/diff to fix the bug via `execute_bash`.
-3. Test your modifications to ensure everything builds and passes tests.
-4. Call `run_evaluation()` to guarantee the issue is officially validated as resolved.
-5. Once confident, call `final_answer(...)` with a summary of your resolution.
+# How to solve
+1. Explore the codebase to locate and understand the bug.
+2. Edit the files needed to fix it.
+3. Run the tests to check your fix.
+4. When the tests pass, call get_patch() to obtain your git diff, then
+   call final_answer(code=<that diff>) so the patch is submitted.
 
 # Example
-Thought: I will search for the faulty method in the codebase.
+Thought: I'll look for the faulty function first.
 ```python
-run_tests(cmd="grep -rn 'def calculate_total' src/")"""
+search_code(pattern="def calculate_total", file_pattern="*.py")
+```
+<end_code>
+"""
 
 
 def build_task_message(task: SWEBenchTaskInput) -> str:
-    # test_list_lit = json.dumps(task.test_list)
-    # test_imports_lit = json.dumps(task.test_imports)
-    # return (
-
-    # )
-    pass
+    """Build the user message describing the SWE-bench issue to fix."""
+    parts = [
+        "Resolve the following GitHub issue in the repository mounted at "
+        "/testbed.",
+    ]
+    if task.repo:
+        parts.append(f"Repository: {task.repo}")
+    parts.append(f"\nIssue:\n{task.problem_statement}")
+    if task.hints_text:
+        parts.append(f"\nHints:\n{task.hints_text}")
+    parts.append(
+        "\nExplore the codebase with the available tools, edit the files "
+        "needed to fix the issue, and run the tests to verify your fix. "
+        "When the tests pass, call get_patch() to get your diff, then call "
+        "final_answer with that diff as the code argument."
+    )
+    return "\n".join(parts)
 
 
 def discover_key_vars() -> list[str]:
@@ -69,13 +87,30 @@ def discover_key_vars() -> list[str]:
     )
 
 
+def _cleanup(sandbox: Sandbox, docker_image: str) -> None:
+    """Best-effort teardown: close the MCP client and remove containers."""
+    try:
+        sandbox.mcp_client.close()
+    except Exception:
+        pass
+    try:
+        subprocess.run(
+            "docker ps -aq --filter "
+            f"ancestor={docker_image} | xargs -r docker rm -f",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception:
+        pass
+
+
 def run_swebench(
     task: SWEBenchTaskInput,
     model_name: str,
     provider_url: str,
 ) -> SolutionOutput:
-    pass
-    # var set ----> child (subprocess) pour run le docker
     os.environ["SWE_DOCKER_IMG"] = task.docker_image
     os.environ["SWE_EVAL_SCRIPT"] = task.eval_script
 
@@ -85,28 +120,30 @@ def run_swebench(
         model=model_name,
         key_env_vars=discover_key_vars(),
     )
-
-    manager = LLMManager(target=[target], client=LLMClient(timeout_s=90.0))
+    manager = LLMManager(targets=[target], client=LLMClient(timeout_s=90.0))
     sandbox = Sandbox()
     sandbox._launch_server("stdio", "python mcp_tools_swebench.py")
 
-    orchestrator = Orchestrator(
-        manager=manager,
-        extractor=CodeExtractor,
-        sandbox=sandbox,
-        system_prompt=build_system_prompt(sandbox.get_man()),
-        stop_sequences=["<end_code>"],
-        max_iterations=30,
-        max_input_tokens=300000,
-        max_output_tokens=10000,
-        max_time_seconds=900,
-    )
-    return orchestrator.run(
-        task_id=str(task.task_id),
-        benchmark="swebench",
-        task_message=build_task_message(task),
-        max_tokens=10000,
-    )
+    try:
+        orchestrator = Orchestrator(
+            manager=manager,
+            extractor=CodeExtractor,
+            sandbox=sandbox,
+            system_prompt=build_system_prompt(sandbox.get_man()),
+            stop_sequences=["<end_code>"],
+            max_iterations=30,
+            max_input_tokens=300000,
+            max_output_tokens=10000,
+            max_time_seconds=900,
+        )
+        return orchestrator.run(
+            task_id=str(task.instance_id),
+            benchmark="swebench",
+            task_message=build_task_message(task),
+            max_tokens=10000,
+        )
+    finally:
+        _cleanup(sandbox, task.docker_image)
 
 
 def run_swebench_cli(
@@ -115,27 +152,45 @@ def run_swebench_cli(
     model_name: str = None,
     provider_url: str = None,
 ) -> None:
+    data: dict = {}
     try:
         with open(task_file, "r") as f:
-            content = f.read()
-
-        data = json.loads(content)
+            data = json.loads(f.read())
         parse_task = SWEBenchTaskInput.model_validate(data)
-
         solution_output = run_swebench(
             parse_task, model_name=model_name, provider_url=provider_url
         )
-
-        os.makedirs(os.path.dirname(output), exist_ok=True)
-        with open(output, "w") as f:
-            f.write(solution_output.model_dump_json(indent=4))
-
     except FileNotFoundError:
-        print("Error file not found")
-    except JSONDecodeError as e:
-        print(f"[Error] {e}")
+        solution_output = SolutionOutput(
+            task_id=str(data.get("instance_id", "unknown")),
+            benchmark="swebench",
+            success=False,
+            solution="",
+            iterations=0,
+            total_requests=0,
+            total_input_tokens=0,
+            total_output_tokens=0,
+            total_time_seconds=0.0,
+            error="task file not found",
+        )
     except Exception as e:
-        print(f"[Error] {e}")
+        solution_output = SolutionOutput(
+            task_id=str(data.get("instance_id", "unknown")),
+            benchmark="swebench",
+            success=False,
+            solution="",
+            iterations=0,
+            total_requests=0,
+            total_input_tokens=0,
+            total_output_tokens=0,
+            total_time_seconds=0.0,
+            error=f"agent crashed: {type(e).__name__}: {e}",
+        )
+
+    if output:
+        path = Path(output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(solution_output.model_dump_json(indent=4))
 
 
 def main() -> None:
