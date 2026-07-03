@@ -10,6 +10,7 @@ from srcs.llm import (
     CodeExtractor,
     Orchestrator,
 )
+from srcs.sandbox import mcp_client
 import json
 import os
 
@@ -85,6 +86,32 @@ def run_mbpp(
     provider_url: str,
 ) -> SolutionOutput:
     """Run the MBPP agent on a single task and return its output."""
+
+    def validate_answer(code: str) -> str | None:
+        """Run the task's official visible tests against a submission.
+
+        Enforces correctness in the harness instead of trusting the
+        model's self-report: if the provided tests fail, the answer is
+        rejected and the failure is fed back to the model.
+        """
+        result = mcp_client.call_tool(
+            "run_tests",
+            {
+                "code": code,
+                "test_list": task.test_list,
+                "test_imports": task.test_imports,
+            },
+        )
+        if "Error:" in result or "Traceback" in result:
+            return (
+                "final_answer rejected: your solution failed the "
+                "official task tests:\n"
+                f"{result}\n"
+                "Fix the code (verify with run_tests using these exact "
+                "tests), then call final_answer(code) again."
+            )
+        return None
+
     target = ProviderTarget(
         name="provider",
         base_url=provider_url,
@@ -112,6 +139,7 @@ def run_mbpp(
             benchmark="mbpp",
             task_message=build_task_message(task),
             max_tokens=1500,
+            validate_answer=validate_answer,
         )
     finally:
         try:
