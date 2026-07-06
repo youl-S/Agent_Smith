@@ -62,7 +62,6 @@ class Sandbox:
                 q_call.put({"tool": tool_name, "args": kwargs})
                 result = q_answer.get()
                 result_str = result.content[0].text
-                # if result_str.startswith("FAIL"):
                 print(result_str)
                 return result_str
 
