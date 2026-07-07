@@ -1,4 +1,4 @@
-from srcs.swe_bench.swebench_agent import main
+from srcs.agent_swebench.agent_swebench import main
 
 if __name__ == "__main__":
     main()
