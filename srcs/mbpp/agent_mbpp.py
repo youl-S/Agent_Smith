@@ -19,7 +19,8 @@ def build_system_prompt(sandbox_manual: str) -> str:
 Thought -> Code -> Observation loop.
 
 # Response format
-Each turn: write a brief Thought, then exactly ONE Python code block ending \
+Each turn: write a brief concise Thought, then EXACTLY ONE Python code block
+ ending \
 with <end_code>:
 
 ```python
@@ -101,7 +102,13 @@ def run_mbpp(
                 "test_imports": task.test_imports,
             },
         )
-        if "Error:" in result or "Traceback" in result:
+
+        content = result.content[0].text
+        if (
+            content is not None
+            and "FAIL:" in content
+            or "traceback" in content.lower()
+        ):
             return (
                 "final_answer rejected: your solution failed the "
                 "official task tests:\n"
@@ -179,12 +186,14 @@ def run_mbpp_cli(
 
 
 def main() -> None:
-    Fire(run_mbpp_cli)
+    try:
+        Fire(run_mbpp_cli)
+    except Exception as e:
+        print(f"Running error: {e}")
 
 
 if __name__ == "__main__":
     try:
         main()
-
     except Exception as e:
         print(f"Error {e}")

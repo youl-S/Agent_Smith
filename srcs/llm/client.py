@@ -105,9 +105,24 @@ class LLMClient:
         choice = resp.choices[0]
         usage = resp.usage
 
+        message = choice.message
+        text = message.content or ""
+        if not text:
+            for attr in ("reasoning_content", "reasoning"):
+                fallback = getattr(message, attr, None)
+                if fallback:
+                    text = fallback
+                    break
+
+        if not text:
+            raise RecoverableError(
+                "empty completion (finish_reason="
+                f"{choice.finish_reason or 'unknown'})"
+            )
+
         return LLMResponse(
             success=True,
-            text=choice.message.content or "",
+            text=text,
             finish_reason=choice.finish_reason or "",
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,

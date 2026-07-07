@@ -64,7 +64,7 @@ class Orchestrator:
         task_id: str,
         benchmark: str,
         task_message: str,
-        input_prediction_factor: float = 1.4,
+        input_prediction_factor: float = 1.2,
         max_tokens: int | None = None,
         validate_answer: Callable | None = None,
     ) -> SolutionOutput:
@@ -165,7 +165,6 @@ class Orchestrator:
                     if result["type"] == "final_answer":
                         solution = result["answer"]
                         if validate_answer is not None:
-                            print("ok")
                             last_test = validate_answer(
                                 solution, self._sandbox
                             )
@@ -211,8 +210,11 @@ class Orchestrator:
                 )
 
         except Exception as e:
-            error = f"orchestrator crashed: {type(e).__name__}: {e}"
+            error = f"validation error: {type(e).__name__}: {e}"
             success = False
+
+        if not success and error is None:
+            error = f"iteration limit ({self._max_iter}) reached"
 
         total_time: float = time.perf_counter() - start
 

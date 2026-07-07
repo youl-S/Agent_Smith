@@ -40,12 +40,12 @@ class McpClient:
         )
         self.loop.run_until_complete(self.session.initialize())
 
-    def stdio_client(self, command: str, arg: str) -> None:
+    def stdio_client(self, command: str, args: list[str]) -> None:
         """Spawn an MCP server as a subprocess and open a stdio session."""
         self._transport_cm = stdio_client(
             StdioServerParameters(
                 command=command,
-                args=[arg],
+                args=args,
                 env={**os.environ},
             )
         )

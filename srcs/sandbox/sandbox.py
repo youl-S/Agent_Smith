@@ -9,9 +9,10 @@ import ast
 import io
 import sys
 import traceback
-import time
 import resource
+import signal
 import socket
+import time
 
 
 class FinalAnswer(BaseException):
@@ -59,13 +60,22 @@ class Sandbox:
             """Build a proxy that forwards a tool call to the parent."""
 
             def stub(**kwargs: Any) -> Any:
+                _, time_left = signal.setitimer(signal.ITIMER_REAL, 0)
                 q_call.put({"tool": tool_name, "args": kwargs})
                 result = q_answer.get()
+                signal.setitimer(signal.ITIMER_REAL, time_left)
                 result_str = result.content[0].text
                 print(result_str)
                 return result_str
 
             return stub
+
+        def raise_timeout(signum: int, frame: Any) -> None:
+            raise TimeoutError(
+                "Timeout after "
+                f"{self._config.max_execution_time_seconds} seconds, "
+                "execution stopped"
+            )
 
         def safe_open(file: Any, *args: Any, **kwargs: Any) -> Any:
             """open() replacement restricted to the allowed directories."""
@@ -144,9 +154,19 @@ class Sandbox:
                 "__builtins__": custom_builtins,
                 "final_answer": final_answer,
             }
-            for tool in self.mcp_client.list_tools().tools:
-                namespace[tool.name] = make_stub(tool.name, q_call, q_answer)
+            try:
+                for tool in self.mcp_client.list_tools().tools:
+                    namespace[tool.name] = make_stub(
+                        tool.name, q_call, q_answer
+                    )
+            except Exception:
+                pass
             socket.socket = block_net  # type: ignore[assignment, misc]
+
+            signal.signal(signal.SIGALRM, raise_timeout)
+            signal.setitimer(
+                signal.ITIMER_REAL, self._config.max_execution_time_seconds
+            )
             exec(code_to_test, namespace)
             q_result.put(
                 {
@@ -163,6 +183,15 @@ class Sandbox:
                 {
                     "type": "final_answer",
                     "answer": answer.args[0],
+                }
+            )
+        except TimeoutError as timeout:
+            q_result.put(
+                {
+                    "type": "error",
+                    "traceback": str(timeout),
+                    "stdout": stdout_capture.getvalue(),
+                    "stderr": stderr_capture.getvalue(),
                 }
             )
         except Exception:
@@ -184,25 +213,26 @@ class Sandbox:
         if protocol == "http":
             self.mcp_client.http_client(args)
         else:
-            try:
-                command, arg = args.split()
-            except ValueError:
+            parts = args.split()
+            if len(parts) < 2:
                 raise ValueError(
-                    "Too many arguments\n Usage: "
-                    'uv run sandbox --mcp-stdio "<command> <script_path>"'
+                    "Missing command or script\n Usage: "
+                    'uv run sandbox --mcp-stdio "<command> <script_path> '
+                    '[args...]"'
                 )
-            self.mcp_client.stdio_client(command, arg)
+            command, server_args = parts[0], parts[1:]
+            self.mcp_client.stdio_client(command, server_args)
 
     def run(
         self,
         code_to_test: str,
     ) -> Any:
-        """Execute ``code_to_test`` in a child process; return its result.
+        """Execute code_to_test in a child process; return its result.
 
-        Spawns the subprocess, services MCP tool calls while it runs and
-        enforces the wall-clock timeout (killing the process on overrun).
-        Returns the timeout message on overrun, otherwise the payload
-        pushed by the subprocess.
+        Spawns the subprocess and services MCP tool calls while it runs.
+        The child enforces the wall-clock timeout itself (via SIGALRM) and
+        pushes its payload — including any partial output on timeout — which
+        this method returns.
         """
         q_call: "multiprocessing.Queue[Any]" = multiprocessing.Queue()
         q_answer: "multiprocessing.Queue[Any]" = multiprocessing.Queue()
@@ -216,7 +246,7 @@ class Sandbox:
         kill = False
         while process.is_alive():
             elapsed_time = time.monotonic() - start_time
-            if elapsed_time >= self._config.max_execution_time_seconds:
+            if elapsed_time >= self._config.max_execution_time_seconds + 1:
                 output = {
                     "type": "error",
                     "traceback": "Timeout after {elapsed_time} seconds, "
@@ -292,15 +322,7 @@ class Sandbox:
             )
         print("Agent Smith Sandbox\n")
         if not mcp_stdio and not mcp_server:
-            answer = str()
-            while answer not in ["http", "stdio"]:
-                answer = input("Select MCP transport ['http', 'stdio']: ")
-            if answer == "http":
-                mcp_server = input("MCP server URL: ")
-            elif answer == "stdio":
-                mcp_stdio = input(
-                    "Command and Path to launch the MCP server script: "
-                )
+            print("Launching sandbox without MCP tools\n")
         try:
             if mcp_stdio:
                 self._launch_server("stdio", mcp_stdio)
@@ -319,8 +341,7 @@ class Sandbox:
     def get_man(self) -> str:
         """Render the sandbox manual with config and MCP metadata."""
         template = """\
-Only stdout and stderr are returned — print() what you need, or the value is
-lost.
+Only stdout and stderr are returned
 
 ## final_answer(answer)
 Always available (not an MCP tool); stops execution and submits. Never catch
