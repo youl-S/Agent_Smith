@@ -13,13 +13,6 @@ dependencies = [
     "python-dotenv>=1.2.2",
 ]
 
-[dependency-groups]
-dev = [
-    "flake8>=7.3.0",
-    "mypy>=2.1.0",
-    "pytest>=9.1.1",
-]
-
 [project.scripts]
 sandbox = "srcs.sandbox.main:main"
 agent_mbpp = "srcs.mbpp.agent_mbpp:main"
