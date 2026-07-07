@@ -95,7 +95,7 @@ class Sandbox:
                 raise ImportError(f"Import {name} not allowed")
             return builtins.__import__(name, *args, **kwargs)
 
-        def final_answer(code: any) -> None:
+        def final_answer(code: Any) -> None:
             """Stop execution and submit ``code`` as the final answer."""
             print(f"\n\n\n{code}\n\n\n")
             if not code:
@@ -249,7 +249,7 @@ class Sandbox:
             if elapsed_time >= self._config.max_execution_time_seconds + 1:
                 output = {
                     "type": "error",
-                    "traceback": "Timeout after {elapsed_time} seconds, "
+                    "traceback": f"Timeout after {elapsed_time} seconds, "
                     "execution stopped",
                 }
                 process.kill()

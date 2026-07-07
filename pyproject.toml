@@ -1,26 +1,29 @@
 [project]
 name = "agent-smith"
 version = "0.1.0"
-description = "Add your description here"
+description = "Autonomous code agent (Thought -> Code -> Observation) with a home-made security sandbox and MCP tools, benchmarked on MBPP and SWE-bench."
 readme = "README.md"
 requires-python = ">=3.10"
 
 dependencies = [
-    "asyncio>=4.0.0",
     "fire>=0.7.1",
-    "flake8>=7.3.0",
     "mcp>=1.28.0",
-    "mypy>=2.1.0",
     "openai>=2.43.0",
     "pydantic>=2.13.4",
-    "pytest>=9.1.1",
     "python-dotenv>=1.2.2",
+]
+
+[dependency-groups]
+dev = [
+    "flake8>=7.3.0",
+    "mypy>=2.1.0",
+    "pytest>=9.1.1",
 ]
 
 [project.scripts]
 sandbox = "srcs.sandbox.main:main"
 agent_mbpp = "srcs.mbpp.agent_mbpp:main"
-agent_swebench = "srcs.swe_bench.swebench_agent:main"
+agent_swebench = "srcs.agent_swebench.agent_swebench:main"
 
 [build-system]
 requires = ["hatchling"]
