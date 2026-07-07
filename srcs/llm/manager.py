@@ -28,6 +28,7 @@ class LLMManager:
         max_backoff_s: float = 8.0,
         max_rate_limit_wait_s: float = 60.0,
         max_rate_limit_rounds: int = 3,
+        rate_limit_wait_s: int = 15,
     ):
         """Initialize the manager.
 
@@ -50,6 +51,7 @@ class LLMManager:
         self._max_backoff_s = max_backoff_s
         self._max_rate_limit_wait_s = max_rate_limit_wait_s
         self._max_rate_limit_rounds = max_rate_limit_rounds
+        self._rate_limit_wait_s = rate_limit_wait_s
 
     def _backoff(self, attempt: int) -> None:
         """Sleep with exponential backoff, capped at max_backoff_s.
@@ -103,6 +105,7 @@ class LLMManager:
                         continue
 
                     api_key = os.environ.get(key_var)
+
                     if not api_key:
                         continue
 
@@ -136,19 +139,17 @@ class LLMManager:
                         self._backoff(retries)
 
                     except FatalError as e:
-                        return LLMResponse.failure(str(e))
+                        last_error = str(e)
+                        self._invalid_api_keys.add(key_var)
+                        retries += 1
 
-            # A full pass over every usable key is done. Give up unless the
-            # pass ended purely because every remaining key was rate limited.
             if not any_key_available or not rate_limited_waits:
                 break
 
-            # Only now, with all keys exhausted, do we wait: honour the
-            # shortest server-suggested delay, or back off if none was given.
             waits = [w for w in rate_limited_waits if w is not None]
             wait = min(waits) if waits else None
             if wait is None:
-                self._backoff(rate_limit_round)
+                time.sleep(self._rate_limit_wait_s)
             elif wait < self._max_rate_limit_wait_s:
                 time.sleep(wait)
             else:
