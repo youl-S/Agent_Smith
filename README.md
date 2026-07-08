@@ -34,7 +34,7 @@ Built by a team of two over the 42 curriculum.
   transports and performs **dynamic tool discovery** so any MCP server plugs in with no
   code change.
 
-### Kévin Kraft — [@Sacrifist13](https://github.com/Kevin-Krt/Kevin-Krt)
+### Kévin Kraft — [@Kevin-Krt](https://github.com/Kevin-Krt/Kevin-Krt)
 **Agent loop, LLM layer, MCP tool servers & the agents.**
 - **Agent orchestration loop** ([srcs/llm/orchestrator.py](srcs/llm/orchestrator.py)) —
   the Thought → Code → Observation loop and its iteration / token / time budgets.
